@@ -283,6 +283,12 @@ function storeShippingData(userId, text) {
 }
 
 function sendAdminSummaryIfNeeded() {
+  const lastSummary = getSetting('SUMMARY_SENT_AT');
+  if (lastSummary) {
+    logInfo('Admin summary already sent', lastSummary);
+    return;
+  }
+
   const adminIdsStr = getSetting('ADMIN_IDS') || getSetting('admin_ids');
   if (!adminIdsStr) {
     return;
@@ -299,12 +305,6 @@ function sendAdminSummaryIfNeeded() {
     return;
   }
 
-  const lastSummary = getSetting('SUMMARY_SENT_AT');
-  if (lastSummary) {
-    logInfo('Admin summary already sent', lastSummary);
-    return;
-  }
-
   const winners = getAllWinners();
   if (!winners.length) {
     return;
@@ -317,13 +317,16 @@ function sendAdminSummaryIfNeeded() {
     grouped[winner.userId].push(winner);
   });
   
+  const groupId = getSetting('GROUP_ID');
   const lines = ['📊 Итоги аукциона:'];
   Object.keys(grouped).forEach((userId) => {
     lines.push('\nПобедитель vk.com/id' + userId + ':');
     let userTotal = 0;
     grouped[userId].forEach((item) => {
-      const imageInfo = item.imageUrl ? ' — ' + item.imageUrl : '';
-      lines.push('• Лот №' + item.lotNumber + ' — ' + item.price + ' руб.' + imageInfo);
+      const postLink = item.postId ? 'https://vk.com/wall-' + groupId + '_' + item.postId : '';
+      const imageInfo = item.imageUrl ? '\n  Фото: ' + item.imageUrl : '';
+      const linkInfo = postLink ? '\n  Ссылка: ' + postLink : '';
+      lines.push('• Лот №' + item.lotNumber + ' — ' + item.price + ' руб.' + linkInfo + imageInfo);
       userTotal += Number(item.price);
     });
     lines.push('Итого: ' + userTotal + ' руб.');
@@ -353,7 +356,7 @@ function parseLotFromText(text) {
     return null;
   }
 
-  const lotNumberMatch = text.match(/лот\s*№?\s*(\d+)/i) || text.match(/№\s*(\d+)/i);
+  const lotNumberMatch = text.match(/№\s*(\d+)/i);
   const startPriceMatch = text.match(/(?:старт(?:овая)?|начальн(?:ая|ой) цена)\s*[:\-]?\s*(\d+)/i);
   const stepMatch = text.match(/шаг(?: ставки)?\s*[:\-]?\s*(\d+)/i);
   const deadline = parseDeadline(text);
@@ -426,8 +429,11 @@ function sendOutbidComment(postId, replyToCommentId) {
   if (waitMs > 0) {
     Utilities.sleep(waitMs);
   }
-  sendComment(postId, OUTBID_MESSAGE, replyToCommentId);
+  const result = sendComment(postId, OUTBID_MESSAGE, replyToCommentId);
   setSetting('LAST_OUTBID_REPLY_AT', String(new Date().getTime()));
+  if (result && result.error) {
+    logError('sendOutbidComment', result.error, { postId: postId, replyToCommentId: replyToCommentId });
+  }
 }
 
 function sendMessage(userId, message) {

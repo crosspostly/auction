@@ -14,10 +14,13 @@ function createMenu() {
     .addItem('Создать/Обновить листы', 'createOrUpdateSheets')
     .addItem('Проверить соединение', 'checkConnection')
     .addItem('Очистить кэш', 'refreshCache')
+    .addSeparator()
     .addItem('Запустить очередь', 'runQueue')
     .addItem('Завершить активные лоты', 'finalizeNow')
     .addItem('Статус', 'showStatus')
+    .addSeparator()
     .addItem('Настроить триггеры', 'setupTriggers')
+    .addItem('Запустить тесты', 'runAllTests')
     .addToUi();
 }
 
