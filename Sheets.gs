@@ -1,5 +1,6 @@
 const SHEETS = {
-  CONFIG: { name: 'Config', headers: ['Lot Number', 'Post Id', 'Start Price', 'Step', 'Deadline', 'Status', 'Current Price', 'Winner Id', 'Winner Comment Id', 'Image Url', 'Last Updated'] },
+  LOTS: { name: 'Лоты', headers: ['Lot Number', 'Post Id', 'Start Price', 'Step', 'Deadline', 'Status', 'Current Price', 'Winner Id', 'Winner Comment Id', 'Image Url', 'Last Updated'] },
+  SETTINGS: { name: 'Settings', headers: ['Key', 'Value', 'Description'] },
   BIDS: { name: 'Bids', headers: ['Timestamp', 'Lot Number', 'User Id', 'Bid Amount', 'Comment Id', 'Post Id'] },
   WINNERS: { name: 'Winners', headers: ['Timestamp', 'Lot Number', 'User Id', 'Price', 'Post Id', 'Image Url', 'Notified'] },
   SHIPPING: { name: 'Shipping', headers: ['Timestamp', 'User Id', 'Lot Numbers', 'Message', 'Status'] },
@@ -12,10 +13,22 @@ const LOT_STATUS_ACTIVE = 'ACTIVE';
 const LOT_STATUS_ENDED = 'ENDED';
 
 function ensureAllSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Rename Config to Лоты if it exists
+  const oldConfig = ss.getSheetByName('Config');
+  if (oldConfig) {
+    const newLots = ss.getSheetByName(SHEETS.LOTS.name);
+    if (!newLots) {
+      oldConfig.setName(SHEETS.LOTS.name);
+    }
+  }
+
   Object.keys(SHEETS).forEach((key) => {
     const sheetDef = SHEETS[key];
     ensureSheet(sheetDef.name, sheetDef.headers);
   });
+  initializeSettingsSheet();
 }
 
 function ensureSheet(name, headers) {
@@ -24,8 +37,27 @@ function ensureSheet(name, headers) {
   if (!sheet) {
     sheet = ss.insertSheet(name);
   }
-  const range = sheet.getRange(1, 1, 1, headers.length);
-  range.setValues([headers]);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+}
+
+function initializeSettingsSheet() {
+  const sheet = getSheet(SHEETS.SETTINGS.name);
+  const settings = [
+    ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE)'],
+    ['admin_ids', '', 'ID администраторов через запятую (для отчетов)'],
+    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\nПосле оплаты пришлите скриншот.', 'Шаблон сообщения о выигрыше'],
+  ];
+  
+  const existingData = sheet.getDataRange().getValues();
+  settings.forEach((s) => {
+    const exists = existingData.some(row => row[0] === s[0]);
+    if (!exists) {
+      sheet.appendRow(s);
+    }
+  });
 }
 
 function getSheet(name) {
@@ -33,20 +65,25 @@ function getSheet(name) {
 }
 
 function logInfo(message, data) {
-  appendLog(SHEETS.LOGS.name, 'INFO', message, data);
+  appendLog(SHEETS.LOGS.name, 'INFO', message, data, '#f3f3f3');
 }
 
 function logError(context, error, data) {
   const message = error && error.message ? error.message : String(error);
-  appendLog(SHEETS.ERRORS.name, context, message, data);
+  appendLog(SHEETS.ERRORS.name, context, message, data, '#ea9999');
 }
 
-function appendLog(sheetName, level, message, data) {
+function appendLog(sheetName, level, message, data, color) {
   const sheet = getSheet(sheetName);
   if (!sheet) {
     return;
   }
-  sheet.appendRow([new Date(), level, message, data ? JSON.stringify(data) : '']);
+  sheet.insertRowAfter(1);
+  const row = [new Date(), level, message, data ? (typeof data === 'string' ? data : JSON.stringify(data)) : ''];
+  sheet.getRange(2, 1, 1, row.length).setValues([row]);
+  if (color) {
+    sheet.getRange(2, 1, 1, row.length).setBackground(color);
+  }
 }
 
 function enqueueEvent(payload) {
@@ -61,7 +98,7 @@ function ensureAndGetSheet(name, headers) {
 }
 
 function getConfigRows() {
-  const sheet = getSheet(SHEETS.CONFIG.name);
+  const sheet = getSheet(SHEETS.LOTS.name);
   if (!sheet) {
     return [];
   }
@@ -70,7 +107,7 @@ function getConfigRows() {
 }
 
 function findLotByPostId(postId) {
-  const sheet = getSheet(SHEETS.CONFIG.name);
+  const sheet = getSheet(SHEETS.LOTS.name);
   if (!sheet) {
     return null;
   }
@@ -84,7 +121,7 @@ function findLotByPostId(postId) {
 }
 
 function findLotByNumber(lotNumber) {
-  const sheet = getSheet(SHEETS.CONFIG.name);
+  const sheet = getSheet(SHEETS.LOTS.name);
   if (!sheet) {
     return null;
   }
@@ -98,7 +135,7 @@ function findLotByNumber(lotNumber) {
 }
 
 function upsertLot(lotData) {
-  const sheet = getSheet(SHEETS.CONFIG.name) || ensureAndGetSheet(SHEETS.CONFIG.name, SHEETS.CONFIG.headers);
+  const sheet = getSheet(SHEETS.LOTS.name) || ensureAndGetSheet(SHEETS.LOTS.name, SHEETS.LOTS.headers);
   const existing = findLotByNumber(lotData.lotNumber) || findLotByPostId(lotData.postId);
   const row = [
     lotData.lotNumber,
@@ -121,11 +158,11 @@ function upsertLot(lotData) {
 }
 
 function updateLotRow(rowIndex, updates) {
-  const sheet = getSheet(SHEETS.CONFIG.name);
+  const sheet = getSheet(SHEETS.LOTS.name);
   if (!sheet) {
     return;
   }
-  const current = sheet.getRange(rowIndex, 1, 1, SHEETS.CONFIG.headers.length).getValues()[0];
+  const current = sheet.getRange(rowIndex, 1, 1, SHEETS.LOTS.headers.length).getValues()[0];
   const updated = current.slice();
   Object.keys(updates).forEach((key) => {
     const columnIndex = getConfigColumnIndex(key);
@@ -198,6 +235,7 @@ function getWinnersByUser(userId) {
       result.push({
         lotNumber: values[i][1],
         price: values[i][3],
+        postId: values[i][4],
         imageUrl: values[i][5]
       });
     }
@@ -220,16 +258,16 @@ function getAllWinners() {
 }
 
 function buildStatus() {
-  const configCount = getSheetRowCount(SHEETS.CONFIG.name);
+  const configCount = getSheetRowCount(SHEETS.LOTS.name);
   const bidsCount = getSheetRowCount(SHEETS.BIDS.name);
   const winnersCount = getSheetRowCount(SHEETS.WINNERS.name);
   const queueCount = getSheetRowCount(SHEETS.QUEUE.name);
   const lastOutbid = getSetting('LAST_OUTBID_REPLY_AT');
   return [
-    'Config rows: ' + configCount,
-    'Bids rows: ' + bidsCount,
-    'Winners rows: ' + winnersCount,
-    'Queue rows: ' + queueCount,
+    'Лоты: ' + configCount,
+    'Ставки: ' + bidsCount,
+    'Победители: ' + winnersCount,
+    'Очередь: ' + queueCount,
     'Last outbid reply: ' + (lastOutbid ? new Date(Number(lastOutbid)).toLocaleString() : 'нет')
   ].join('\n');
 }
@@ -244,6 +282,16 @@ function getSheetRowCount(name) {
 }
 
 function getSetting(key) {
+  // Check Sheet first
+  const sheet = getSheet(SHEETS.SETTINGS.name);
+  if (sheet) {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === key) {
+        return data[i][1];
+      }
+    }
+  }
   return PropertiesService.getScriptProperties().getProperty(key) || '';
 }
 
