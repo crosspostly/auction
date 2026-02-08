@@ -45,10 +45,10 @@ function ensureSheet(name, headers) {
 
 function initializeSettingsSheet() {
   const sheet = getSheet(SHEETS.SETTINGS.name);
+  // В Settings храним только шаблоны и флаги; реквизиты и админов задаем в PropertiesService.
   const settings = [
     ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE)'],
-    ['admin_ids', '', 'ID администраторов через запятую (для отчетов)'],
-    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\nПосле оплаты пришлите скриншот.', 'Шаблон сообщения о выигрыше'],
+    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\nПосле оплаты пришлите скриншот.', 'Шаблон сообщения о выигрыше (плейсхолдеры: {lots}, {total}, {delivery}, {payment_details})'],
   ];
   
   const existingData = sheet.getDataRange().getValues();
@@ -282,7 +282,18 @@ function getSheetRowCount(name) {
 }
 
 function getSetting(key) {
-  // Check Sheet first
+  const props = PropertiesService.getScriptProperties();
+  // Sensitive values are stored in Script Properties; Settings sheet keeps templates/flags.
+  const sensitiveKeys = ['PAYMENT_PHONE', 'PAYMENT_BANK', 'DELIVERY_RULES', 'ADMIN_IDS'];
+  const isSensitive = sensitiveKeys.indexOf(key) !== -1;
+
+  if (isSensitive) {
+    const propValue = props.getProperty(key);
+    if (propValue) {
+      return propValue;
+    }
+  }
+
   const sheet = getSheet(SHEETS.SETTINGS.name);
   if (sheet) {
     const data = sheet.getDataRange().getValues();
@@ -292,7 +303,7 @@ function getSetting(key) {
       }
     }
   }
-  return PropertiesService.getScriptProperties().getProperty(key) || '';
+  return props.getProperty(key) || '';
 }
 
 function setSettings(settings) {

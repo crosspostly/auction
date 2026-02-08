@@ -31,6 +31,7 @@ function setupAuthorization() {
       '4. Скопируйте access_token из адресной строки.'
   );
   
+  // Чувствительные настройки (оплаты/доставки/админов) сохраняются в PropertiesService.
   const settings = {
     VK_TOKEN: promptSetting(ui, 'VK_TOKEN', 'Введите VK_TOKEN'),
     GROUP_ID: promptSetting(ui, 'GROUP_ID', 'Введите GROUP_ID (число без минуса)'),
@@ -38,7 +39,8 @@ function setupAuthorization() {
     VK_SECRET: promptSetting(ui, 'VK_SECRET', 'Введите VK_SECRET (secret key из Callback API)'),
     PAYMENT_PHONE: promptSetting(ui, 'PAYMENT_PHONE', 'Телефон для оплаты (СБП)'),
     PAYMENT_BANK: promptSetting(ui, 'PAYMENT_BANK', 'Банк для оплаты'),
-    DELIVERY_RULES: promptSetting(ui, 'DELIVERY_RULES', 'Стоимость доставки (например, 1-3:300, 4-6:500, 7+:0)')
+    DELIVERY_RULES: promptSetting(ui, 'DELIVERY_RULES', 'Стоимость доставки (например, 1-3:300, 4-6:500, 7+:0)'),
+    ADMIN_IDS: promptSetting(ui, 'ADMIN_IDS', 'ID администраторов через запятую (для отчетов)')
   };
   
   setSettings(settings);
