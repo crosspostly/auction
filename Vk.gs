@@ -199,7 +199,7 @@ function finalizeLot(row, rowIndex) {
   if (!winnerId || currentPrice === 0) {
     sendComment(postId, LOT_NOT_SOLD_MESSAGE);
   } else {
-    const winnerMessage = 'Поздравляем! Вы выиграли лот №' + lotNumber + ' за ' + currentPrice + ' руб. Напишите "аукцион" в сообщения группы для получения итогового списка и реквизитов.';
+    const winnerMessage = buildAuctionMessage([{ lotNumber: lotNumber, price: currentPrice, postId: postId }]);
     sendMessage(winnerId, winnerMessage);
     appendWinner(lotNumber, winnerId, currentPrice, postId, imageUrl, true);
   }
@@ -212,32 +212,43 @@ function sendUserWins(userId) {
     sendMessage(userId, 'Пока нет выигранных лотов.');
     return;
   }
-  
+
+  const message = buildAuctionMessage(wins);
+  sendMessage(userId, message);
+}
+
+function buildAuctionMessage(wins) {
   const groupId = getSetting('GROUP_ID');
   let total = 0;
   const lotLines = wins.map((win) => {
-    total += Number(win.price);
-    const link = 'https://vk.com/wall-' + groupId + '_' + win.postId;
-    return '• Лот №' + win.lotNumber + ' — ' + win.price + ' руб. (' + link + ')';
+    total += Number(win.price) || 0;
+    const link = win.postId ? 'https://vk.com/wall-' + groupId + '_' + win.postId : '';
+    const linkPart = link ? ' (' + link + ')' : '';
+    return '• Лот №' + win.lotNumber + ' — ' + win.price + ' руб.' + linkPart;
   }).join('\n');
-  
+
   const deliveryCost = calculateDeliveryCost(wins.length);
-  const paymentPhone = getSetting('PAYMENT_PHONE');
-  const paymentBank = getSetting('PAYMENT_BANK');
-  const paymentDetails = paymentPhone + ' (' + paymentBank + ')';
-  
+  const paymentDetails = buildPaymentDetails();
+
   let template = getSetting('dm_template_auction');
   if (!template) {
     template = 'Вы выиграли:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}';
   }
-  
-  const message = template
+
+  return template
     .replace('{lots}', lotLines)
     .replace('{total}', total)
     .replace('{delivery}', deliveryCost)
     .replace('{payment_details}', paymentDetails);
-    
-  sendMessage(userId, message);
+}
+
+function buildPaymentDetails() {
+  const paymentPhone = getSetting('PAYMENT_PHONE');
+  const paymentBank = getSetting('PAYMENT_BANK');
+  if (paymentPhone && paymentBank) {
+    return paymentPhone + ' (' + paymentBank + ')';
+  }
+  return paymentPhone || paymentBank || '';
 }
 
 function calculateDeliveryCost(count) {
@@ -272,26 +283,26 @@ function storeShippingData(userId, text) {
 }
 
 function sendAdminSummaryIfNeeded() {
-  const adminIdsStr = getSetting('admin_ids') || getSetting('ADMIN_ID');
+  const adminIdsStr = getSetting('ADMIN_IDS') || getSetting('admin_ids');
   if (!adminIdsStr) {
     return;
   }
   
   const adminIds = adminIdsStr.split(',').map(id => id.trim()).filter(Boolean);
-  if (adminIds.length === 0) return;
+  if (adminIds.length === 0) {
+    return;
+  }
 
   const configRows = getConfigRows();
   const active = configRows.some((row) => row[5] !== LOT_STATUS_ENDED);
   if (active) {
     return;
   }
-  
+
   const lastSummary = getSetting('SUMMARY_SENT_AT');
-  if (lastSummary && (new Date().getTime() - Number(lastSummary)) < 3600000) {
-     // Avoid spamming summary if many lots finalized around same time
-     // But wait, the requirement is to add a toggle.
-     // "Add admin summary toggle via admin_ids in Settings (empty => no summary)."
-     // I've handled the empty case above.
+  if (lastSummary) {
+    logInfo('Admin summary already sent', lastSummary);
+    return;
   }
 
   const winners = getAllWinners();
@@ -311,7 +322,8 @@ function sendAdminSummaryIfNeeded() {
     lines.push('\nПобедитель vk.com/id' + userId + ':');
     let userTotal = 0;
     grouped[userId].forEach((item) => {
-      lines.push('• Лот №' + item.lotNumber + ' — ' + item.price + ' руб.');
+      const imageInfo = item.imageUrl ? ' — ' + item.imageUrl : '';
+      lines.push('• Лот №' + item.lotNumber + ' — ' + item.price + ' руб.' + imageInfo);
       userTotal += Number(item.price);
     });
     lines.push('Итого: ' + userTotal + ' руб.');
@@ -341,7 +353,7 @@ function parseLotFromText(text) {
     return null;
   }
 
-  const lotNumberMatch = text.match(/лот\s*№?\s*(\d+)/i);
+  const lotNumberMatch = text.match(/лот\s*№?\s*(\d+)/i) || text.match(/№\s*(\d+)/i);
   const startPriceMatch = text.match(/(?:старт(?:овая)?|начальн(?:ая|ой) цена)\s*[:\-]?\s*(\d+)/i);
   const stepMatch = text.match(/шаг(?: ставки)?\s*[:\-]?\s*(\d+)/i);
   const deadline = parseDeadline(text);
@@ -409,9 +421,9 @@ function getPhotoUrlFromAttachments(attachments) {
 function sendOutbidComment(postId, replyToCommentId) {
   const now = new Date().getTime();
   const last = Number(getSetting('LAST_OUTBID_REPLY_AT')) || 0;
-  const intervalSec = Math.floor(Math.random() * 10) + 5;
+  const intervalSec = Math.floor(Math.random() * 15) + 10;
   const waitMs = intervalSec * 1000 - (now - last);
-  if (waitMs > 0 && waitMs < 15000) {
+  if (waitMs > 0) {
     Utilities.sleep(waitMs);
   }
   sendComment(postId, OUTBID_MESSAGE, replyToCommentId);
@@ -463,6 +475,7 @@ function callVk(method, params, retryCount = 0) {
       if (parsed.error.error_code === 6 || parsed.error.error_code === 10) { // Too many requests or Server error
         if (retryCount < 3) {
           const waitTime = Math.pow(2, retryCount) * 1000;
+          logInfo('callVk retry', { method: method, retry: retryCount + 1, waitMs: waitTime, error: parsed.error });
           Utilities.sleep(waitTime);
           return callVk(method, params, retryCount + 1);
         }
@@ -472,7 +485,9 @@ function callVk(method, params, retryCount = 0) {
     return parsed;
   } catch (e) {
     if (retryCount < 3) {
-      Utilities.sleep(Math.pow(2, retryCount) * 1000);
+      const waitTime = Math.pow(2, retryCount) * 1000;
+      logInfo('callVk retry after exception', { method: method, retry: retryCount + 1, waitMs: waitTime, error: e.message || String(e) });
+      Utilities.sleep(waitTime);
       return callVk(method, params, retryCount + 1);
     }
     logError('callVk:' + method + ' Exception', e, params);
