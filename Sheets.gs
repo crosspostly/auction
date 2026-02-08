@@ -45,14 +45,17 @@ function ensureSheet(name, headers) {
 
 function initializeSettingsSheet() {
   const sheet = getSheet(SHEETS.SETTINGS.name);
-  // В Settings храним только шаблоны и флаги; реквизиты и админов задаем в PropertiesService.
   const settings = [
-    ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE)'],
-    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\nПосле оплаты пришлите скриншот.', 'Шаблон сообщения о выигрыше (плейсхолдеры: {lots}, {total}, {delivery}, {payment_details})'],
+    ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE). Если TRUE, лоты создаются только для постов в субботу по МСК.'],
+    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\n\nПосле оплаты пришлите скриншок чека.', 'Шаблон ЛС победителю. Доступные переменные: {lots} — список лотов с ценами и ссылками, {total} — сумма за лоты (без доставки), {delivery} — стоимость доставки, {payment_details} — реквизиты оплаты (телефон и банк).'],
+    ['', '', 'ВАЖНО: чувствительные данные (PAYMENT_PHONE, PAYMENT_BANK, DELIVERY_RULES, ADMIN_IDS) храните в PropertiesService через меню VK Auction → Настройка авторизации. НЕ ЗАПИСЫВАЙТЕ их в эту таблицу!']
   ];
   
   const existingData = sheet.getDataRange().getValues();
   settings.forEach((s) => {
+    if (s[0] === '') {
+      return;
+    }
     const exists = existingData.some(row => row[0] === s[0]);
     if (!exists) {
       sheet.appendRow(s);
@@ -253,6 +256,7 @@ function getAllWinners() {
     lotNumber: row[1],
     userId: row[2],
     price: row[3],
+    postId: row[4],
     imageUrl: row[5]
   }));
 }
@@ -283,15 +287,11 @@ function getSheetRowCount(name) {
 
 function getSetting(key) {
   const props = PropertiesService.getScriptProperties();
-  // Sensitive values are stored in Script Properties; Settings sheet keeps templates/flags.
-  const sensitiveKeys = ['PAYMENT_PHONE', 'PAYMENT_BANK', 'DELIVERY_RULES', 'ADMIN_IDS'];
+  const sensitiveKeys = ['PAYMENT_PHONE', 'PAYMENT_BANK', 'DELIVERY_RULES', 'ADMIN_IDS', 'VK_TOKEN', 'GROUP_ID', 'CONFIRMATION_STRING', 'VK_SECRET'];
   const isSensitive = sensitiveKeys.indexOf(key) !== -1;
 
   if (isSensitive) {
-    const propValue = props.getProperty(key);
-    if (propValue) {
-      return propValue;
-    }
+    return props.getProperty(key) || '';
   }
 
   const sheet = getSheet(SHEETS.SETTINGS.name);
