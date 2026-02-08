@@ -2,9 +2,6 @@ const API_VERSION = '5.131';
 const CACHE_TTL_SECONDS = 21600;
 const OUTBID_MESSAGE = 'Ваша ставка перебита';
 const LOT_NOT_SOLD_MESSAGE = 'Лот не продан';
-const WINNER_MESSAGE_TEMPLATE = 'Поздравляем! Вы выиграли лот №{lotNumber} за {price} руб. Напишите в сообщения группы "Аукцион ({date})" для оформления.';
-const USER_WINS_HEADER = 'Ваши выигрыши:';
-const USER_WINS_FOOTER = '\nОплата и доставка обсуждаются с администратором. Отправьте данные для доставки ответным сообщением.\nБудете копить?';
 
 function onOpen() {
   createMenu();
@@ -13,44 +10,53 @@ function onOpen() {
 function createMenu() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('VK Auction')
-    .addItem('Authorization/Setup', 'setupAuthorization')
-    .addItem('Create/Update sheets', 'createOrUpdateSheets')
-    .addItem('Check connection', 'checkConnection')
-    .addItem('Refresh cache', 'refreshCache')
-    .addItem('Run queue', 'runQueue')
-    .addItem('Finalize now', 'finalizeNow')
-    .addItem('Status', 'showStatus')
+    .addItem('Настройка авторизации (VK)', 'setupAuthorization')
+    .addItem('Создать/Обновить листы', 'createOrUpdateSheets')
+    .addItem('Проверить соединение', 'checkConnection')
+    .addItem('Очистить кэш', 'refreshCache')
+    .addItem('Запустить очередь', 'runQueue')
+    .addItem('Завершить активные лоты', 'finalizeNow')
+    .addItem('Статус', 'showStatus')
+    .addItem('Настроить триггеры', 'setupTriggers')
     .addToUi();
 }
 
 function setupAuthorization() {
   const ui = SpreadsheetApp.getUi();
   ui.alert(
-    'Для получения VK token используйте https://vkhost.github.io.\n' +
-      'Выберите приложение "VK Admin", отметьте права messages, wall, groups и скопируйте access_token.'
+    'ИНСТРУКЦИЯ:\n' +
+      '1. Перейдите на https://vkhost.github.io\n' +
+      '2. Выберите "VK Admin"\n' +
+      '3. Разрешите доступ к messages, wall, groups\n' +
+      '4. Скопируйте access_token из адресной строки.'
   );
+  
   const settings = {
     VK_TOKEN: promptSetting(ui, 'VK_TOKEN', 'Введите VK_TOKEN'),
     GROUP_ID: promptSetting(ui, 'GROUP_ID', 'Введите GROUP_ID (число без минуса)'),
     CONFIRMATION_STRING: promptSetting(ui, 'CONFIRMATION_STRING', 'Введите CONFIRMATION_STRING для Callback API'),
     VK_SECRET: promptSetting(ui, 'VK_SECRET', 'Введите VK_SECRET (secret key из Callback API)'),
-    ADMIN_ID: promptSetting(ui, 'ADMIN_ID', 'Введите ADMIN_ID для итоговых отчетов')
+    PAYMENT_PHONE: promptSetting(ui, 'PAYMENT_PHONE', 'Телефон для оплаты (СБП)'),
+    PAYMENT_BANK: promptSetting(ui, 'PAYMENT_BANK', 'Банк для оплаты'),
+    DELIVERY_RULES: promptSetting(ui, 'DELIVERY_RULES', 'Стоимость доставки (например, 1-3:300, 4-6:500, 7+:0)')
   };
+  
   setSettings(settings);
-  ui.alert('Настройки сохранены.');
+  ui.alert('Настройки сохранены в PropertiesService.');
 }
 
 function promptSetting(ui, key, message) {
-  const response = ui.prompt(message, ui.ButtonSet.OK_CANCEL);
+  const current = getSetting(key);
+  const response = ui.prompt(message + (current ? ' (текущее: ' + current + ')' : ''), ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) {
-    return getSetting(key);
+    return current;
   }
   return response.getResponseText().trim();
 }
 
 function createOrUpdateSheets() {
   ensureAllSheets();
-  SpreadsheetApp.getUi().alert('Листы созданы/обновлены.');
+  SpreadsheetApp.getUi().alert('Листы созданы/обновлены. Проверьте лист Settings.');
 }
 
 function checkConnection() {
@@ -70,7 +76,7 @@ function checkConnection() {
 function refreshCache() {
   const props = PropertiesService.getScriptProperties();
   props.setProperty('CACHE_SALT', String(new Date().getTime()));
-  SpreadsheetApp.getUi().alert('Cache обновлен.');
+  SpreadsheetApp.getUi().alert('Кэш событий очищен.');
 }
 
 function runQueue() {
@@ -84,6 +90,42 @@ function finalizeNow() {
 function showStatus() {
   const status = buildStatus();
   SpreadsheetApp.getUi().alert(status);
+}
+
+function setupTriggers() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Clear existing triggers
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  
+  // Queue processor
+  ScriptApp.newTrigger('processQueue')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+    
+  // Health check
+  ScriptApp.newTrigger('healthCheck')
+    .timeBased()
+    .everyHours(1)
+    .create();
+    
+  SpreadsheetApp.getUi().alert('Триггеры настроены (каждую минуту обработка очереди, каждый час health-check).');
+}
+
+function healthCheck() {
+  try {
+    const groupId = getSetting('GROUP_ID');
+    if (!groupId) return;
+    const response = callVk('groups.getById', { group_id: groupId });
+    if (response && response.response) {
+      logInfo('Health Check: OK');
+    } else {
+      logError('Health Check', 'Failed to connect to VK', response);
+    }
+  } catch (e) {
+    logError('Health Check', e);
+  }
 }
 
 function doPost(e) {
