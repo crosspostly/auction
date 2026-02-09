@@ -51,6 +51,9 @@ jobs:
             exit 1
           fi
           
+          echo "🔍 Input structure:"
+          jq 'keys' /tmp/clasp_input.json
+          
           # Проверяем структуру: есть ли tokens.default?
           HAS_TOKENS_DEFAULT=$(jq -r '.tokens.default // empty' /tmp/clasp_input.json)
           
@@ -82,16 +85,26 @@ jobs:
           
           echo "✅ Authentication configured"
           
+          echo ""
+          echo "🔍 DEBUG: .clasprc.json structure:"
+          jq '{
+            has_token: (.token != null),
+            has_access_token: (.token.access_token != null),
+            has_refresh_token: (.token.refresh_token != null),
+            access_token_length: (.token.access_token | length),
+            refresh_token_preview: (.token.refresh_token[0:20] + "..."),
+            has_oauth2: (.oauth2ClientSettings != null),
+            client_id_preview: (.oauth2ClientSettings.clientId[0:20] + "...")
+          }' ~/.clasprc.json
+          
           # 📋 Создаём .clasp.json если его нет
           if [ ! -f ".clasp.json" ]; then
             echo "⚠️  .clasp.json not found in repository, but that's OK - it exists now"
           fi
           
+          echo ""
           echo "📝 Current .clasp.json:"
           cat .clasp.json
-          
-          echo "📝 Verifying .clasprc.json structure:"
-          jq -r '.token.access_token[0:20] + "..."' ~/.clasprc.json
         shell: bash
 
       - name: 🔍 Verify files to push
@@ -156,7 +169,7 @@ jobs:
           echo "::error::Deployment to Google Apps Script failed!"
           echo "::error::Check the logs above for details"
           echo "::error::Common issues:"
-          echo "::error::1. CLASP_JSON secret is invalid or expired"
+          echo "::error::1. CLASP_JSON access token is expired - run 'clasp login' locally and update secret"
           echo "::error::2. .clasp.json missing or has wrong scriptId"
           echo "::error::3. No permission to access the script"
           echo "::error::4. Script with given ID does not exist"
