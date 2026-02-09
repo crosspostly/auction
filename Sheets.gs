@@ -1,12 +1,12 @@
 const SHEETS = {
   LOTS: { name: 'Лоты', headers: ['Lot Number', 'Post Id', 'Start Price', 'Step', 'Deadline', 'Status', 'Current Price', 'Winner Id', 'Winner Comment Id', 'Image Url', 'Last Updated'] },
-  SETTINGS: { name: 'Settings', headers: ['Key', 'Value', 'Description'] },
-  BIDS: { name: 'Bids', headers: ['Timestamp', 'Lot Number', 'User Id', 'Bid Amount', 'Comment Id', 'Post Id'] },
-  WINNERS: { name: 'Winners', headers: ['Timestamp', 'Lot Number', 'User Id', 'Price', 'Post Id', 'Image Url', 'Notified'] },
-  SHIPPING: { name: 'Shipping', headers: ['Timestamp', 'User Id', 'Lot Numbers', 'Message', 'Status'] },
-  LOGS: { name: 'Logs', headers: ['Timestamp', 'Level', 'Message', 'Data'] },
-  ERRORS: { name: 'Errors', headers: ['Timestamp', 'Context', 'Message', 'Data'] },
-  QUEUE: { name: 'Queue', headers: ['Timestamp', 'Event Id', 'Type', 'Payload'] }
+  SETTINGS: { name: 'Настройки', headers: ['Key', 'Value', 'Description'] },
+  BIDS: { name: 'Ставки', headers: ['Timestamp', 'Lot Number', 'User Id', 'Bid Amount', 'Comment Id', 'Post Id'] },
+  WINNERS: { name: 'Победители', headers: ['Timestamp', 'Lot Number', 'User Id', 'Price', 'Post Id', 'Image Url', 'Notified'] },
+  SHIPPING: { name: 'Доставка', headers: ['Timestamp', 'User Id', 'Lot Numbers', 'Message', 'Status'] },
+  LOGS: { name: 'Логи', headers: ['Timestamp', 'Level', 'Message', 'Data'] },
+  ERRORS: { name: 'Ошибки', headers: ['Timestamp', 'Context', 'Message', 'Data'] },
+  QUEUE: { name: 'Очередь', headers: ['Timestamp', 'Event Id', 'Type', 'Payload'] }
 };
 
 const LOT_STATUS_ACTIVE = 'ACTIVE';
@@ -15,14 +15,25 @@ const LOT_STATUS_ENDED = 'ENDED';
 function ensureAllSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
-  // Rename Config to Лоты if it exists
-  const oldConfig = ss.getSheetByName('Config');
-  if (oldConfig) {
-    const newLots = ss.getSheetByName(SHEETS.LOTS.name);
-    if (!newLots) {
-      oldConfig.setName(SHEETS.LOTS.name);
+  // Rename old English sheets to Russian
+  const migrations = [
+    { old: 'Config', new: SHEETS.LOTS.name },
+    { old: 'Settings', new: SHEETS.SETTINGS.name },
+    { old: 'Bids', new: SHEETS.BIDS.name },
+    { old: 'Winners', new: SHEETS.WINNERS.name },
+    { old: 'Shipping', new: SHEETS.SHIPPING.name },
+    { old: 'Logs', new: SHEETS.LOGS.name },
+    { old: 'Errors', new: SHEETS.ERRORS.name },
+    { old: 'Queue', new: SHEETS.QUEUE.name }
+  ];
+  
+  migrations.forEach(migration => {
+    const oldSheet = ss.getSheetByName(migration.old);
+    const newSheet = ss.getSheetByName(migration.new);
+    if (oldSheet && !newSheet) {
+      oldSheet.setName(migration.new);
     }
-  }
+  });
 
   Object.keys(SHEETS).forEach((key) => {
     const sheetDef = SHEETS[key];
@@ -47,7 +58,7 @@ function initializeSettingsSheet() {
   const sheet = getSheet(SHEETS.SETTINGS.name);
   const settings = [
     ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE). Если TRUE, лоты создаются только для постов в субботу по МСК.'],
-    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\n\nПосле оплаты пришлите скриншок чека.', 'Шаблон ЛС победителю. Доступные переменные: {lots} — список лотов с ценами и ссылками, {total} — сумма за лоты (без доставки), {delivery} — стоимость доставки, {payment_details} — реквизиты оплаты (телефон и банк).'],
+    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\n\nПосле оплаты пришлите скришок чека.', 'Шаблон ЛС победителю. Доступные переменные: {lots} — список лотов с ценами и ссылками, {total} — сумма за лоты (без доставки), {delivery} — стоимость доставки, {payment_details} — реквизиты оплаты (телефон и банк).'],
     ['', '', 'ВАЖНО: чувствительные данные (PAYMENT_PHONE, PAYMENT_BANK, DELIVERY_RULES, ADMIN_IDS) храните в PropertiesService через меню VK Auction → Настройка авторизации. НЕ ЗАПИСЫВАЙТЕ их в эту таблицу!']
   ];
   
