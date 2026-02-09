@@ -5,11 +5,11 @@ on:
     branches:
       - main
     paths:
-      - '**.gs'
-      - '**.js'
-      - 'appsscript.json'
-      - '.clasp.json'
-  workflow_dispatch:  # Позволяет запускать вручную
+      - 'src/**.gs'
+      - 'src/**.html'
+      - 'src/appsscript.json'
+      - 'src/.clasp.json'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -33,7 +33,6 @@ jobs:
         run: |
           if [ -z "${{ secrets.CLASP_JSON }}" ]; then
             echo "❌ ERROR: CLASP_JSON secret is not set!"
-            echo "Please add CLASP_JSON to repository secrets."
             exit 1
           fi
           echo "✅ CLASP_JSON secret is set"
@@ -42,10 +41,8 @@ jobs:
         run: |
           echo "🔑 Transforming CLASP_JSON to .clasprc.json format..."
           
-          # Сохраняем исходный JSON во временный файл
           echo '${{ secrets.CLASP_JSON }}' > /tmp/clasp_input.json
           
-          # Проверка валидности JSON
           if ! jq empty /tmp/clasp_input.json 2>/dev/null; then
             echo "❌ ERROR: CLASP_JSON is not valid JSON!"
             exit 1
@@ -54,13 +51,11 @@ jobs:
           echo "🔍 Input structure:"
           jq 'keys' /tmp/clasp_input.json
           
-          # Проверяем структуру: есть ли tokens.default?
           HAS_TOKENS_DEFAULT=$(jq -r '.tokens.default // empty' /tmp/clasp_input.json)
           
           if [ ! -z "$HAS_TOKENS_DEFAULT" ]; then
             echo "📝 Detected tokens.default structure, transforming..."
             
-            # Трансформируем из tokens.default в стандартный формат clasp
             jq '{
               token: {
                 access_token: .tokens.default.access_token,
@@ -96,39 +91,35 @@ jobs:
             has_oauth2: (.oauth2ClientSettings != null),
             client_id_preview: (.oauth2ClientSettings.clientId[0:20] + "...")
           }' ~/.clasprc.json
-          
-          # 📋 Создаём .clasp.json если его нет
-          if [ ! -f ".clasp.json" ]; then
-            echo "⚠️  .clasp.json not found in repository, but that's OK - it exists now"
-          fi
-          
-          echo ""
-          echo "📝 Current .clasp.json:"
-          cat .clasp.json
         shell: bash
 
-      - name: 🔍 Verify files to push
+      - name: 🔍 Verify src directory and .clasp.json
         run: |
-          echo "📂 Files that will be pushed:"
-          ls -la *.gs *.json 2>/dev/null || echo "No .gs or .json files found"
+          echo "📂 Files in src directory:"
+          ls -la src/
           
           echo ""
-          echo "📄 appsscript.json content:"
-          cat appsscript.json
+          echo "📝 src/.clasp.json content:"
+          cat src/.clasp.json
+          
+          echo ""
+          echo "📄 src/appsscript.json content:"
+          cat src/appsscript.json
         shell: bash
 
       - name: 🚀 Push to Google Apps Script
         id: push
         run: |
-          echo "🚀 Starting push to Google Apps Script..."
+          cd src
           
-          # Проверка статуса перед push
+          echo "🚀 Starting push from src directory..."
+          echo "Current directory: $(pwd)"
+          
           echo "🔍 Checking clasp status..."
           if ! clasp status; then
             echo "⚠️  WARNING: clasp status check failed, but continuing..."
           fi
           
-          # Push с force чтобы перезаписать удаленные изменения
           echo "📤 Pushing files..."
           if clasp push --force; then
             echo "✅ Successfully pushed to Google Apps Script!"
@@ -170,6 +161,6 @@ jobs:
           echo "::error::Check the logs above for details"
           echo "::error::Common issues:"
           echo "::error::1. CLASP_JSON access token is expired - run 'clasp login' locally and update secret"
-          echo "::error::2. .clasp.json missing or has wrong scriptId"
+          echo "::error::2. src/.clasp.json missing or has wrong scriptId"
           echo "::error::3. No permission to access the script"
           echo "::error::4. Script with given ID does not exist"
