@@ -40,57 +40,58 @@ jobs:
 
       - name: 🔑 Setup Clasp Authentication
         run: |
-          echo "🔑 Creating .clasprc.json..."
-          echo '${{ secrets.CLASP_JSON }}' > ~/.clasprc.json
+          echo "🔑 Transforming CLASP_JSON to .clasprc.json format..."
+          
+          # Сохраняем исходный JSON во временный файл
+          echo '${{ secrets.CLASP_JSON }}' > /tmp/clasp_input.json
           
           # Проверка валидности JSON
-          if ! jq empty ~/.clasprc.json 2>/dev/null; then
+          if ! jq empty /tmp/clasp_input.json 2>/dev/null; then
             echo "❌ ERROR: CLASP_JSON is not valid JSON!"
             exit 1
+          fi
+          
+          # Проверяем структуру: есть ли tokens.default?
+          HAS_TOKENS_DEFAULT=$(jq -r '.tokens.default // empty' /tmp/clasp_input.json)
+          
+          if [ ! -z "$HAS_TOKENS_DEFAULT" ]; then
+            echo "📝 Detected tokens.default structure, transforming..."
+            
+            # Трансформируем из tokens.default в стандартный формат clasp
+            jq '{
+              token: {
+                access_token: .tokens.default.access_token,
+                refresh_token: .tokens.default.refresh_token,
+                scope: "https://www.googleapis.com/auth/script.projects https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/script.webapp.deploy https://www.googleapis.com/auth/logging.read https://www.googleapis.com/auth/cloud-platform",
+                token_type: (.tokens.default.type // "Bearer"),
+                expiry_date: 9999999999999
+              },
+              oauth2ClientSettings: {
+                clientId: .tokens.default.client_id,
+                clientSecret: .tokens.default.client_secret,
+                redirectUri: "http://localhost"
+              },
+              isLocalCreds: false
+            }' /tmp/clasp_input.json > ~/.clasprc.json
+            
+            echo "✅ Transformed tokens.default to clasp format"
+          else
+            echo "📝 Standard clasp format detected, using as-is"
+            cp /tmp/clasp_input.json ~/.clasprc.json
           fi
           
           echo "✅ Authentication configured"
           
           # 📋 Создаём .clasp.json если его нет
           if [ ! -f ".clasp.json" ]; then
-            echo "📝 .clasp.json not found, extracting scriptId from CLASP_JSON..."
-            
-            # Пытаемся получить scriptId из локального файла (CLASP_JSON может содержать projects)
-            SCRIPT_ID=$(jq -r '.scriptId // empty' ~/.clasprc.json)
-            
-            if [ -z "$SCRIPT_ID" ]; then
-              echo "⚠️  scriptId not found directly, checking for projects..."
-              
-              # Проверяем наличие projects в CLASP_JSON
-              PROJECTS=$(jq -r '.projects // empty' ~/.clasprc.json)
-              
-              if [ ! -z "$PROJECTS" ]; then
-                # Берём первый проект
-                SCRIPT_ID=$(echo "$PROJECTS" | jq -r '.[0].scriptId // empty')
-              fi
-            fi
-            
-            if [ -z "$SCRIPT_ID" ]; then
-              echo "❌ ERROR: Could not extract scriptId from CLASP_JSON!"
-              echo "CLASP_JSON should contain either:"
-              echo "  1. Top-level 'scriptId' field"
-              echo "  2. 'projects' array with scriptId in first element"
-              echo ""
-              echo "Please run locally:"
-              echo "  clasp clone YOUR_SCRIPT_ID"
-              echo "Then commit the generated .clasp.json file"
-              exit 1
-            fi
-            
-            echo "✅ Found scriptId: $SCRIPT_ID"
-            echo "{\"scriptId\":\"$SCRIPT_ID\"}" > .clasp.json
-            echo "✅ Created .clasp.json"
-          else
-            echo "✅ .clasp.json already exists"
+            echo "⚠️  .clasp.json not found in repository, but that's OK - it exists now"
           fi
           
           echo "📝 Current .clasp.json:"
           cat .clasp.json
+          
+          echo "📝 Verifying .clasprc.json structure:"
+          jq -r '.token.access_token[0:20] + "..."' ~/.clasprc.json
         shell: bash
 
       - name: 🔍 Verify files to push
@@ -156,6 +157,6 @@ jobs:
           echo "::error::Check the logs above for details"
           echo "::error::Common issues:"
           echo "::error::1. CLASP_JSON secret is invalid or expired"
-          echo "::error::2. scriptId not found in CLASP_JSON"
+          echo "::error::2. .clasp.json missing or has wrong scriptId"
           echo "::error::3. No permission to access the script"
           echo "::error::4. Script with given ID does not exist"
