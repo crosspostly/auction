@@ -1,0 +1,31 @@
+# Ignore everything except .gs files and appsscript.json
+**/**
+!*.gs
+!appsscript.json
+
+# Ignore git and github
+.git/**
+.github/**
+.gitignore
+
+# Ignore documentation
+*.md
+CHANGELOG.md
+README.md
+DEPLOYMENT.md
+FULL_PROJECT_SPEC.md
+DOC_VK_GAS_INTEGRATION.md
+vk-auction-tech-spec-v2.md
+
+# Ignore Node.js files
+package.json
+package-lock.json
+node_modules/**
+
+# Ignore Python files
+*.py
+debug_vk.py
+
+# Ignore clasp files
+.clasp.json
+.clasprc.json
