@@ -23,7 +23,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: 📦 Install Clasp
         run: |
@@ -39,9 +38,9 @@ jobs:
           fi
           echo "✅ CLASP_JSON secret is set"
 
-      - name: 🔑 Authenticate Clasp
+      - name: 🔑 Setup Clasp Authentication
         run: |
-          echo "Creating .clasprc.json..."
+          echo "🔑 Creating .clasprc.json..."
           echo '${{ secrets.CLASP_JSON }}' > ~/.clasprc.json
           
           # Проверка валидности JSON
@@ -51,20 +50,47 @@ jobs:
           fi
           
           echo "✅ Authentication configured"
-        shell: bash
-
-      - name: 📋 Check .clasp.json
-        run: |
+          
+          # 📋 Создаём .clasp.json если его нет
           if [ ! -f ".clasp.json" ]; then
-            echo "⚠️  WARNING: .clasp.json not found in repository"
-            echo "You need to run 'clasp create' or 'clasp clone' locally first"
-            echo "Then commit .clasp.json to the repository"
-            exit 1
+            echo "📝 .clasp.json not found, extracting scriptId from CLASP_JSON..."
+            
+            # Пытаемся получить scriptId из локального файла (CLASP_JSON может содержать projects)
+            SCRIPT_ID=$(jq -r '.scriptId // empty' ~/.clasprc.json)
+            
+            if [ -z "$SCRIPT_ID" ]; then
+              echo "⚠️  scriptId not found directly, checking for projects..."
+              
+              # Проверяем наличие projects в CLASP_JSON
+              PROJECTS=$(jq -r '.projects // empty' ~/.clasprc.json)
+              
+              if [ ! -z "$PROJECTS" ]; then
+                # Берём первый проект
+                SCRIPT_ID=$(echo "$PROJECTS" | jq -r '.[0].scriptId // empty')
+              fi
+            fi
+            
+            if [ -z "$SCRIPT_ID" ]; then
+              echo "❌ ERROR: Could not extract scriptId from CLASP_JSON!"
+              echo "CLASP_JSON should contain either:"
+              echo "  1. Top-level 'scriptId' field"
+              echo "  2. 'projects' array with scriptId in first element"
+              echo ""
+              echo "Please run locally:"
+              echo "  clasp clone YOUR_SCRIPT_ID"
+              echo "Then commit the generated .clasp.json file"
+              exit 1
+            fi
+            
+            echo "✅ Found scriptId: $SCRIPT_ID"
+            echo "{\"scriptId\":\"$SCRIPT_ID\"}" > .clasp.json
+            echo "✅ Created .clasp.json"
+          else
+            echo "✅ .clasp.json already exists"
           fi
           
-          echo "✅ .clasp.json found"
-          echo "Script ID:"
-          cat .clasp.json | jq -r '.scriptId'
+          echo "📝 Current .clasp.json:"
+          cat .clasp.json
         shell: bash
 
       - name: 🔍 Verify files to push
@@ -80,14 +106,16 @@ jobs:
       - name: 🚀 Push to Google Apps Script
         id: push
         run: |
-          echo "Starting push to Google Apps Script..."
+          echo "🚀 Starting push to Google Apps Script..."
           
           # Проверка статуса перед push
+          echo "🔍 Checking clasp status..."
           if ! clasp status; then
-            echo "⚠️  WARNING: clasp status failed, but continuing..."
+            echo "⚠️  WARNING: clasp status check failed, but continuing..."
           fi
           
           # Push с force чтобы перезаписать удаленные изменения
+          echo "📤 Pushing files..."
           if clasp push --force; then
             echo "✅ Successfully pushed to Google Apps Script!"
             echo "success=true" >> $GITHUB_OUTPUT
@@ -112,8 +140,12 @@ jobs:
           
           if [ "${{ steps.push.outputs.success }}" = "true" ]; then
             echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Your changes have been deployed to Google Apps Script." >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for error details." >> $GITHUB_STEP_SUMMARY
           fi
         shell: bash
 
@@ -124,5 +156,6 @@ jobs:
           echo "::error::Check the logs above for details"
           echo "::error::Common issues:"
           echo "::error::1. CLASP_JSON secret is invalid or expired"
-          echo "::error::2. .clasp.json is missing or has wrong scriptId"
+          echo "::error::2. scriptId not found in CLASP_JSON"
           echo "::error::3. No permission to access the script"
+          echo "::error::4. Script with given ID does not exist"
