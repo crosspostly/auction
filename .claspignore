@@ -1,5 +1,4 @@
 # Ignore everything except .gs files and appsscript.json
-**/**
 !*.gs
 !*.html
 !appsscript.json

@@ -1,341 +1,186 @@
 const SHEETS = {
-  LOTS: { name: 'Лоты', headers: ['Lot Number', 'Post Id', 'Start Price', 'Step', 'Deadline', 'Status', 'Current Price', 'Winner Id', 'Winner Comment Id', 'Image Url', 'Last Updated'] },
-  SETTINGS: { name: 'Настройки', headers: ['Key', 'Value', 'Description'] },
-  BIDS: { name: 'Ставки', headers: ['Timestamp', 'Lot Number', 'User Id', 'Bid Amount', 'Comment Id', 'Post Id'] },
-  WINNERS: { name: 'Победители', headers: ['Timestamp', 'Lot Number', 'User Id', 'Price', 'Post Id', 'Image Url', 'Notified'] },
-  SHIPPING: { name: 'Доставка', headers: ['Timestamp', 'User Id', 'Lot Numbers', 'Message', 'Status'] },
-  LOGS: { name: 'Логи', headers: ['Timestamp', 'Level', 'Message', 'Data'] },
-  ERRORS: { name: 'Ошибки', headers: ['Timestamp', 'Context', 'Message', 'Data'] },
-  QUEUE: { name: 'Очередь', headers: ['Timestamp', 'Event Id', 'Type', 'Payload'] }
+  Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline"] },
+  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id"] },
+  Winners: { name: "Победители", headers: ["lot_id", "name", "price", "winner_id", "winner_name", "won_at", "status", "delivery", "paid", "shipped"] },
+  Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
+  Statistics: { name: "Статистика", headers: ["Timestamp", "EventType", "Details"] },
+  EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
+  NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
+  Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
 };
 
-const LOT_STATUS_ACTIVE = 'ACTIVE';
-const LOT_STATUS_ENDED = 'ENDED';
+const DEFAULT_SETTINGS = {
+  DEBUG_VK_API: true,
+  bid_step_enabled: true,
+  bid_step: 50,
+  min_bid_increment: 50,
+  max_bid: 1000000,
+  delivery_rules: JSON.stringify({ "1-3": 450, "4-6": 550, "7+": 650 }),
+  order_summary_template: "Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой."
+};
 
-function ensureAllSheets() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Rename old English sheets to Russian
-  const migrations = [
-    { old: 'Config', new: SHEETS.LOTS.name },
-    { old: 'Settings', new: SHEETS.SETTINGS.name },
-    { old: 'Bids', new: SHEETS.BIDS.name },
-    { old: 'Winners', new: SHEETS.WINNERS.name },
-    { old: 'Shipping', new: SHEETS.SHIPPING.name },
-    { old: 'Logs', new: SHEETS.LOGS.name },
-    { old: 'Errors', new: SHEETS.ERRORS.name },
-    { old: 'Queue', new: SHEETS.QUEUE.name }
-  ];
-  
-  migrations.forEach(migration => {
-    const oldSheet = ss.getSheetByName(migration.old);
-    const newSheet = ss.getSheetByName(migration.new);
-    if (oldSheet && !newSheet) {
-      oldSheet.setName(migration.new);
-    }
-  });
+const SETTINGS_DESCRIPTIONS = {
+  DEBUG_VK_API: "Включить подробное логгирование запросов к VK API (TRUE/FALSE)",
+  bid_step_enabled: "Включить проверку шага ставки (TRUE/FALSE)",
+  bid_step: "Размер шага ставки (например, 50 руб)",
+  min_bid_increment: "Минимальная надбавка к текущей цене",
+  max_bid: "Максимально допустимая ставка (защита от опечаток)",
+  delivery_rules: "Правила доставки (JSON). Формат: \"кол-во\":цена",
+  order_summary_template: "Шаблон сообщения побетелю",
+  payment_phone: "Телефон для оплаты (скрыто)",
+  payment_bank: "Банк получателя (скрыто)"
+};
 
-  Object.keys(SHEETS).forEach((key) => {
-    const sheetDef = SHEETS[key];
-    ensureSheet(sheetDef.name, sheetDef.headers);
-  });
-  initializeSettingsSheet();
+var _ss_cache = null;
+function getSpreadsheet() { 
+  if (!_ss_cache) _ss_cache = SpreadsheetApp.getActiveSpreadsheet();
+  return _ss_cache; 
 }
 
-function ensureSheet(name, headers) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(name);
+function getSheet(sheetKey) {
+  const config = SHEETS[sheetKey];
+  const ss = getSpreadsheet();
+  let sheet = ss.getSheetByName(config.name);
   if (!sheet) {
-    sheet = ss.insertSheet(name);
+    sheet = ss.insertSheet(config.name);
+    ensureHeaders(sheet, config.headers);
   }
+  return sheet;
+}
+
+function ensureHeaders(sheet, headers) {
   if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
     sheet.setFrozenRows(1);
   }
 }
 
-function initializeSettingsSheet() {
-  const sheet = getSheet(SHEETS.SETTINGS.name);
-  const settings = [
-    ['only_saturday', 'FALSE', 'Только субботние посты (TRUE/FALSE). Если TRUE, лоты создаются только для постов в субботу по МСК.'],
-    ['dm_template_auction', 'Привет! 🌸\n\nВы выиграли в аукционе:\n{lots}\n\nИТОГО: {total} руб.\nДоставка: {delivery} руб.\n\nКарта для оплаты: {payment_details}\n\nПосле оплаты пришлите скришок чека.', 'Шаблон ЛС победителю. Доступные переменные: {lots} — список лотов с ценами и ссылками, {total} — сумма за лоты (без доставки), {delivery} — стоимость доставки, {payment_details} — реквизиты оплаты (телефон и банк).'],
-    ['', '', 'ВАЖНО: чувствительные данные (PAYMENT_PHONE, PAYMENT_BANK, DELIVERY_RULES, ADMIN_IDS) храните в PropertiesService через меню VK Auction → Настройка авторизации. НЕ ЗАПИСЫВАЙТЕ их в эту таблицу!']
-  ];
-  
-  const existingData = sheet.getDataRange().getValues();
-  settings.forEach((s) => {
-    if (s[0] === '') {
-      return;
-    }
-    const exists = existingData.some(row => row[0] === s[0]);
-    if (!exists) {
-      sheet.appendRow(s);
-    }
-  });
-}
-
-function getSheet(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-}
-
-function logInfo(message, data) {
-  appendLog(SHEETS.LOGS.name, 'INFO', message, data, '#f3f3f3');
-}
-
-function logError(context, error, data) {
-  const message = error && error.message ? error.message : String(error);
-  appendLog(SHEETS.ERRORS.name, context, message, data, '#ea9999');
-}
-
-function appendLog(sheetName, level, message, data, color) {
-  const sheet = getSheet(sheetName);
-  if (!sheet) {
-    return;
-  }
-  sheet.insertRowAfter(1);
-  const row = [new Date(), level, message, data ? (typeof data === 'string' ? data : JSON.stringify(data)) : ''];
-  sheet.getRange(2, 1, 1, row.length).setValues([row]);
-  if (color) {
-    sheet.getRange(2, 1, 1, row.length).setBackground(color);
-  }
-}
-
-function enqueueEvent(payload) {
-  const sheet = getSheet(SHEETS.QUEUE.name) || ensureAndGetSheet(SHEETS.QUEUE.name, SHEETS.QUEUE.headers);
-  const eventId = payload.event_id || buildEventId(payload);
-  sheet.appendRow([new Date(), eventId, payload.type, JSON.stringify(payload)]);
-}
-
-function ensureAndGetSheet(name, headers) {
-  ensureSheet(name, headers);
-  return getSheet(name);
-}
-
-function getConfigRows() {
-  const sheet = getSheet(SHEETS.LOTS.name);
-  if (!sheet) {
-    return [];
-  }
+function getSheetData(sheetKey) {
+  const sheet = getSheet(sheetKey);
   const values = sheet.getDataRange().getValues();
-  return values.slice(1);
-}
-
-function findLotByPostId(postId) {
-  const sheet = getSheet(SHEETS.LOTS.name);
-  if (!sheet) {
-    return null;
-  }
-  const values = sheet.getDataRange().getValues();
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][1]) === String(postId)) {
-      return { rowIndex: i + 1, values: values[i] };
-    }
-  }
-  return null;
-}
-
-function findLotByNumber(lotNumber) {
-  const sheet = getSheet(SHEETS.LOTS.name);
-  if (!sheet) {
-    return null;
-  }
-  const values = sheet.getDataRange().getValues();
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][0]) === String(lotNumber)) {
-      return { rowIndex: i + 1, values: values[i] };
-    }
-  }
-  return null;
-}
-
-function upsertLot(lotData) {
-  const sheet = getSheet(SHEETS.LOTS.name) || ensureAndGetSheet(SHEETS.LOTS.name, SHEETS.LOTS.headers);
-  const existing = findLotByNumber(lotData.lotNumber) || findLotByPostId(lotData.postId);
-  const row = [
-    lotData.lotNumber,
-    lotData.postId,
-    lotData.startPrice,
-    lotData.step,
-    lotData.deadline,
-    lotData.status || LOT_STATUS_ACTIVE,
-    lotData.currentPrice || '',
-    lotData.winnerId || '',
-    lotData.winnerCommentId || '',
-    lotData.imageUrl || '',
-    new Date()
-  ];
-  if (existing) {
-    sheet.getRange(existing.rowIndex, 1, 1, row.length).setValues([row]);
-  } else {
-    sheet.appendRow(row);
-  }
-}
-
-function updateLotRow(rowIndex, updates) {
-  const sheet = getSheet(SHEETS.LOTS.name);
-  if (!sheet) {
-    return;
-  }
-  const current = sheet.getRange(rowIndex, 1, 1, SHEETS.LOTS.headers.length).getValues()[0];
-  const updated = current.slice();
-  Object.keys(updates).forEach((key) => {
-    const columnIndex = getConfigColumnIndex(key);
-    if (columnIndex !== null) {
-      updated[columnIndex] = updates[key];
-    }
-  });
-  updated[10] = new Date();
-  sheet.getRange(rowIndex, 1, 1, updated.length).setValues([updated]);
-}
-
-function getConfigColumnIndex(key) {
-  const mapping = {
-    lotNumber: 0,
-    postId: 1,
-    startPrice: 2,
-    step: 3,
-    deadline: 4,
-    status: 5,
-    currentPrice: 6,
-    winnerId: 7,
-    winnerCommentId: 8,
-    imageUrl: 9,
-    lastUpdated: 10
-  };
-  return Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : null;
-}
-
-function appendBid(lotNumber, userId, amount, commentId, postId) {
-  const sheet = getSheet(SHEETS.BIDS.name) || ensureAndGetSheet(SHEETS.BIDS.name, SHEETS.BIDS.headers);
-  sheet.appendRow([new Date(), lotNumber, userId, amount, commentId, postId]);
-}
-
-function appendWinner(lotNumber, userId, price, postId, imageUrl, notified) {
-  const sheet = getSheet(SHEETS.WINNERS.name) || ensureAndGetSheet(SHEETS.WINNERS.name, SHEETS.WINNERS.headers);
-  if (winnerExists(lotNumber)) {
-    return;
-  }
-  sheet.appendRow([new Date(), lotNumber, userId, price, postId, imageUrl, notified ? 'YES' : 'NO']);
-}
-
-function winnerExists(lotNumber) {
-  const sheet = getSheet(SHEETS.WINNERS.name);
-  if (!sheet) {
-    return false;
-  }
-  const values = sheet.getDataRange().getValues();
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][1]) === String(lotNumber)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function appendShipping(userId, lotNumbers, message) {
-  const sheet = getSheet(SHEETS.SHIPPING.name) || ensureAndGetSheet(SHEETS.SHIPPING.name, SHEETS.SHIPPING.headers);
-  sheet.appendRow([new Date(), userId, lotNumbers, message, 'RECEIVED']);
-}
-
-function getWinnersByUser(userId) {
-  const sheet = getSheet(SHEETS.WINNERS.name);
-  if (!sheet) {
-    return [];
-  }
-  const values = sheet.getDataRange().getValues();
-  const result = [];
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][2]) === String(userId)) {
-      result.push({
-        lotNumber: values[i][1],
-        price: values[i][3],
-        postId: values[i][4],
-        imageUrl: values[i][5]
-      });
-    }
-  }
-  return result;
-}
-
-function getAllWinners() {
-  const sheet = getSheet(SHEETS.WINNERS.name);
-  if (!sheet) {
-    return [];
-  }
-  const values = sheet.getDataRange().getValues();
-  return values.slice(1).map((row) => ({
-    lotNumber: row[1],
-    userId: row[2],
-    price: row[3],
-    postId: row[4],
-    imageUrl: row[5]
+  if (values.length < 2) return [];
+  const headers = values[0];
+  return values.slice(1).map((row, index) => ({
+    rowIndex: index + 2,
+    data: headers.reduce((acc, header, idx) => { acc[header] = row[idx]; return acc; }, {})
   }));
 }
 
-function buildStatus() {
-  const configCount = getSheetRowCount(SHEETS.LOTS.name);
-  const bidsCount = getSheetRowCount(SHEETS.BIDS.name);
-  const winnersCount = getSheetRowCount(SHEETS.WINNERS.name);
-  const queueCount = getSheetRowCount(SHEETS.QUEUE.name);
-  const lastOutbid = getSetting('LAST_OUTBID_REPLY_AT');
-  return [
-    'Лоты: ' + configCount,
-    'Ставки: ' + bidsCount,
-    'Победители: ' + winnersCount,
-    'Очередь: ' + queueCount,
-    'Last outbid reply: ' + (lastOutbid ? new Date(Number(lastOutbid)).toLocaleString() : 'нет')
-  ].join('\n');
+function appendRow(sheetKey, rowData) {
+  const sheet = getSheet(sheetKey);
+  const headers = SHEETS[sheetKey].headers;
+  const row = headers.map(h => rowData[h] !== undefined ? rowData[h] : "");
+  sheet.appendRow(row);
 }
 
-function getSheetRowCount(name) {
-  const sheet = getSheet(name);
-  if (!sheet) {
-    return 0;
-  }
-  const lastRow = sheet.getLastRow();
-  return Math.max(0, lastRow - 1);
+function updateRow(sheetKey, rowIndex, rowData) {
+  const sheet = getSheet(sheetKey);
+  const headers = SHEETS[sheetKey].headers;
+  const existingRow = sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
+  const updatedRow = headers.map((h, i) => rowData[h] !== undefined ? rowData[h] : existingRow[i]);
+  sheet.getRange(rowIndex, 1, 1, headers.length).setValues([updatedRow]);
 }
 
-function getSetting(key) {
-  const props = PropertiesService.getScriptProperties();
-  const sensitiveKeys = ['PAYMENT_PHONE', 'PAYMENT_BANK', 'DELIVERY_RULES', 'ADMIN_IDS', 'VK_TOKEN', 'GROUP_ID', 'CONFIRMATION_STRING', 'VK_SECRET'];
-  const isSensitive = sensitiveKeys.indexOf(key) !== -1;
-
-  if (isSensitive) {
-    return props.getProperty(key) || '';
-  }
-
-  const sheet = getSheet(SHEETS.SETTINGS.name);
-  if (sheet) {
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === key) {
-        return data[i][1];
-      }
-    }
-  }
-  return props.getProperty(key) || '';
+function log(type, message, details) {
+  try {
+    appendRow("Logs", { 
+      date: new Date(), 
+      type: type, 
+      message: message, 
+      details: details ? (typeof details === 'string' ? details : JSON.stringify(details)) : "" 
+    });
+  } catch (e) {}
 }
 
-function setSettings(settings) {
-  const props = PropertiesService.getScriptProperties();
-  Object.keys(settings).forEach((key) => {
-    if (settings[key]) {
-      props.setProperty(key, settings[key]);
-    }
+function logInfo(msg, det) { log("ИНФО", msg, det); }
+function logError(src, err, pay) { log("ОШИБКА", `[${src}] ${err.message || String(err)}`, pay); }
+function logIncoming(data) { log("ВХОДЯЩИЙ", "Webhook от VK", data); }
+
+function toggleSystemSheets(hide) {
+  const systemKeys = ["Bids", "NotificationQueue", "Logs"];
+  const ss = getSpreadsheet();
+  systemKeys.forEach(key => {
+    const sheet = ss.getSheetByName(SHEETS[key].name);
+    if (sheet) hide ? sheet.hideSheet() : sheet.showSheet();
   });
 }
 
-function setSetting(key, value) {
-  PropertiesService.getScriptProperties().setProperty(key, value);
+function upsertLot(lot) {
+  const rows = getSheetData("Config");
+  const existing = rows.find(r => String(r.data.lot_id) === String(lot.lot_id));
+  if (existing) updateRow("Config", existing.rowIndex, lot);
+  else appendRow("Config", lot);
 }
 
-function getCachePrefix() {
-  const salt = getSetting('CACHE_SALT') || 'default';
-  return 'event:' + salt + ':';
+function findLotByPostId(postId) {
+  const rows = getSheetData("Config");
+  const match = rows.find(r => String(r.data.post_id) === String(postId));
+  return match ? match.data : null;
 }
 
-function buildEventId(payload) {
-  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(payload));
-  return Utilities.base64Encode(digest);
+function updateLot(lotId, updates) {
+  const rows = getSheetData("Config");
+  const existing = rows.find(r => String(r.data.lot_id) === String(lotId));
+  if (existing) updateRow("Config", existing.rowIndex, updates);
+}
+
+function getSettings() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get("settings");
+  if (cached) return JSON.parse(cached);
+  
+  const values = getSheet("Settings").getDataRange().getValues();
+  const settings = { ...DEFAULT_SETTINGS };
+  if (values.length > 1) {
+    values.slice(1).forEach(row => { if (row[0]) settings[row[0]] = parseSettingValue(row[1]); });
+  }
+  
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const keys = ["VK_TOKEN", "GROUP_ID", "CONFIRMATION_CODE", "VK_SECRET", "PAYMENT_PHONE", "PAYMENT_BANK", "WEB_APP_URL"];
+  keys.forEach(k => { if (props[k]) settings[k] = props[k]; });
+  
+  cache.put("settings", JSON.stringify(settings), 300);
+  return settings;
+}
+
+function parseSettingValue(v) {
+  if (v === "" || v === null) return "";
+  if (v === true || v === false) return v;
+  const s = String(v).trim();
+  if (s === "true") return true;
+  if (s === "false") return false;
+  if (!isNaN(Number(s)) && s !== "") return Number(s);
+  if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) { try { return JSON.parse(s); } catch (e) { return s; } }
+  return s;
+}
+
+function createDemoData() {
+  const lotSheet = getSheet('Config');
+  if (lotSheet.getLastRow() <= 1) {
+    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
+  }
+  const settingsSheet = getSheet('Settings');
+  const data = settingsSheet.getDataRange().getValues();
+  const keysPresent = data.map(r => r[0]);
+  Object.keys(DEFAULT_SETTINGS).forEach(key => {
+    if (!keysPresent.includes(key)) settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key] || ""]);
+  });
+}
+
+function queueNotification(n) {
+  const rows = getSheetData("NotificationQueue");
+  const existing = rows.find(r => r.data.status === "pending" && String(r.data.user_id) === String(n.user_id) && r.data.type === n.type);
+  if (existing) updateRow("NotificationQueue", existing.rowIndex, { payload: JSON.stringify(n.payload), created_at: new Date() });
+  else appendRow("NotificationQueue", { queue_id: Utilities.getUuid(), user_id: n.user_id, type: n.type, payload: JSON.stringify(n.payload), status: "pending", created_at: new Date() });
+}
+
+function updateNotificationStatus(id, status, date) {
+  const rows = getSheetData("NotificationQueue");
+  const match = rows.find(r => String(r.data.queue_id) === String(id));
+  if (match) updateRow("NotificationQueue", match.rowIndex, { status: status, processed_at: date || new Date() });
+}
+
+function updateWinnersStatus(userId, status) {
+  const rows = getSheetData("Winners");
+  rows.forEach(r => { if (String(r.data.winner_id) === String(userId)) updateRow("Winners", r.rowIndex, { status: status }); });
 }
