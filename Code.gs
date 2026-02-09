@@ -1,4 +1,4 @@
-const API_VERSION = '5.131';
+const API_VERSION = '5.199';
 const CACHE_TTL_SECONDS = 21600;
 const OUTBID_MESSAGE = 'Ваша ставка перебита';
 const LOT_NOT_SOLD_MESSAGE = 'Лот не продан';
@@ -21,6 +21,7 @@ function createMenu() {
     .addSeparator()
     .addItem('Настроить триггеры', 'setupTriggers')
     .addItem('Запустить тесты', 'runAllTests')
+    .addItem('🔬 Тест VK API', 'testVkApiConnection')
     .addToUi();
 }
 
@@ -133,28 +134,158 @@ function healthCheck() {
   }
 }
 
+// ✅ ИСПРАВЛЕННАЯ ФУНКЦИЯ doPost
 function doPost(e) {
   try {
+    // Логируем сырой запрос для диагностики
+    if (!e || !e.postData || !e.postData.contents) {
+      logError('doPost', 'Empty request', 'No payload received');
+      return ContentService.createTextOutput('ok')
+        .setMimeType(ContentService.MimeType.TEXT);  // ✅ Добавлен setMimeType
+    }
+    
     const payload = JSON.parse(e.postData.contents);
-    const confirmation = getSetting('CONFIRMATION_STRING');
+    
+    // ✅ Логируем ВСЕ входящие события
+    logInfo('doPost received', { 
+      type: payload.type, 
+      event_id: payload.event_id || 'no_id',
+      group_id: payload.group_id
+    });
+    
+    // ✅ Обработка confirmation с setMimeType
     if (payload.type === 'confirmation') {
-      return ContentService.createTextOutput(confirmation || '');
+      const confirmation = getSetting('CONFIRMATION_STRING');
+      
+      if (!confirmation) {
+        logError('doPost', 'CONFIRMATION_STRING not set', payload.group_id);
+        return ContentService.createTextOutput('')
+          .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType
+      }
+      
+      logInfo('Returning confirmation', { 
+        code: confirmation.substring(0, 10) + '...',
+        group_id: payload.group_id
+      });
+      
+      return ContentService.createTextOutput(String(confirmation).trim())
+        .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType
     }
 
+    // ✅ Проверка secret
     const secret = getSetting('VK_SECRET');
     if (secret && payload.secret !== secret) {
-      logError('doPost', 'Secret mismatch', payload);
-      return ContentService.createTextOutput('ok');
+      logError('doPost', 'Secret mismatch', { 
+        expected_prefix: secret.substring(0, 3) + '...', 
+        received_prefix: payload.secret ? payload.secret.substring(0, 3) + '...' : 'none',
+        type: payload.type
+      });
+      return ContentService.createTextOutput('ok')
+        .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType
     }
 
+    // ✅ Проверка дубликатов (не блокирует при ошибках)
     if (isDuplicateEvent(payload)) {
-      return ContentService.createTextOutput('ok');
+      logInfo('Duplicate event skipped', { 
+        type: payload.type, 
+        event_id: payload.event_id 
+      });
+      return ContentService.createTextOutput('ok')
+        .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType
     }
 
+    // Добавляем в очередь
     enqueueEvent(payload);
-    return ContentService.createTextOutput('ok');
+    logInfo('Event enqueued', { 
+      type: payload.type, 
+      event_id: payload.event_id || buildEventId(payload) 
+    });
+    
+    return ContentService.createTextOutput('ok')
+      .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType
+      
   } catch (error) {
-    logError('doPost', error, e && e.postData ? e.postData.contents : 'no payload');
-    return ContentService.createTextOutput('ok');
+    logError('doPost Exception', error.message || String(error), 
+      e && e.postData ? e.postData.contents.substring(0, 200) : 'no payload');
+    
+    return ContentService.createTextOutput('ok')
+      .setMimeType(ContentService.MimeType.TEXT);  // ✅ setMimeType даже при ошибке
+  }
+}
+
+// ✅ НОВАЯ ФУНКЦИЯ ДЛЯ ТЕСТИРОВАНИЯ
+function testVkApiConnection() {
+  const ui = SpreadsheetApp.getUi();
+  const results = [];
+  
+  try {
+    // Тест 1: Получение информации о группе
+    const groupId = getSetting('GROUP_ID');
+    if (!groupId) {
+      ui.alert('❌ GROUP_ID не настроен');
+      return;
+    }
+    
+    const groupInfo = callVk('groups.getById', { group_id: groupId });
+    if (groupInfo && groupInfo.response) {
+      results.push('✅ Группа: ' + groupInfo.response[0].name);
+    } else if (groupInfo && groupInfo.error) {
+      results.push('❌ Ошибка группы: ' + groupInfo.error.error_msg);
+    } else {
+      results.push('❌ Нет ответа от VK API');
+    }
+    
+    // Тест 2: Проверка callback серверов
+    const servers = callVk('groups.getCallbackServers', { group_id: groupId });
+    if (servers && servers.response) {
+      results.push('📡 Серверов: ' + servers.response.count);
+      if (servers.response.items && servers.response.items.length > 0) {
+        results.push('  URL: ' + servers.response.items[0].url);
+        results.push('  Статус: ' + servers.response.items[0].status);
+      }
+    }
+    
+    // Тест 3: Проверка confirmation code
+    const confirmation = getSetting('CONFIRMATION_STRING');
+    if (confirmation) {
+      results.push('✅ Confirmation code: ' + confirmation.substring(0, 10) + '...');
+    } else {
+      results.push('⚠️ CONFIRMATION_STRING не настроен');
+    }
+    
+    // Тест 4: Проверка secret
+    const secret = getSetting('VK_SECRET');
+    if (secret) {
+      results.push('✅ Secret key: ' + secret.substring(0, 5) + '...');
+    } else {
+      results.push('⚠️ VK_SECRET не настроен');
+    }
+    
+    // Тест 5: Симуляция входящего события
+    const testPayload = {
+      type: 'confirmation',
+      group_id: Number(groupId)
+    };
+    
+    const mockRequest = {
+      postData: {
+        contents: JSON.stringify(testPayload)
+      }
+    };
+    
+    const response = doPost(mockRequest);
+    const responseText = response.getContent();
+    
+    if (responseText === confirmation) {
+      results.push('✅ doPost отвечает правильно');
+    } else {
+      results.push('❌ doPost вернул: "' + responseText + '"');
+    }
+    
+    ui.alert('Результаты тестирования:\n\n' + results.join('\n'));
+    
+  } catch (e) {
+    ui.alert('❌ Ошибка теста:\n' + e.message + '\n\n' + results.join('\n'));
+    logError('testVkApiConnection', e, results);
   }
 }
