@@ -1,3 +1,140 @@
+// =====================================
+// VK API INTEGRATION - FIXED VERSION
+// =====================================
+
+const API_VERSION = '5.199';
+const CACHE_TTL_SECONDS = 21600;
+const OUTBID_MESSAGE = 'Ваша ставка перебита';
+const LOT_NOT_SOLD_MESSAGE = 'Лот не продан';
+
+// ✅ ПРАВИЛЬНАЯ ФУНКЦИЯ VK API
+function callVk(method, params, retryCount = 0) {
+  const token = getSetting('VK_TOKEN');
+  if (!token) {
+    logError('callVk', 'VK_TOKEN не задан', method);
+    return null;
+  }
+  
+  // ✅ Создаём чистый объект параметров с приведением к строкам
+  const cleanParams = {
+    access_token: String(token),
+    v: String(API_VERSION)
+  };
+  
+  // ✅ Приводим ВСЕ параметры к строкам
+  for (const key in params) {
+    if (params[key] !== null && params[key] !== undefined) {
+      cleanParams[key] = String(params[key]);
+    }
+  }
+  
+  // ✅ Ручная сборка payload в формате application/x-www-form-urlencoded
+  const payload = Object.keys(cleanParams)
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(cleanParams[k]))
+    .join('&');
+  
+  const options = {
+    method: 'post',
+    contentType: 'application/x-www-form-urlencoded',
+    payload: payload,
+    muteHttpExceptions: true
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch('https://api.vk.com/method/' + method, options);
+    const body = response.getContentText();
+    const parsed = JSON.parse(body);
+    
+    if (parsed.error) {
+      // Обработка rate limiting и временных ошибок
+      if (parsed.error.error_code === 6 || parsed.error.error_code === 10) {
+        if (retryCount < 3) {
+          const waitTime = Math.pow(2, retryCount) * 1000;
+          logInfo('callVk retry', { 
+            method: method, 
+            retry: retryCount + 1, 
+            waitMs: waitTime, 
+            error: parsed.error 
+          });
+          Utilities.sleep(waitTime);
+          return callVk(method, params, retryCount + 1);
+        }
+      }
+      
+      logError('callVk:' + method, parsed.error, {
+        params: Object.keys(params).join(','),
+        error_code: parsed.error.error_code,
+        error_msg: parsed.error.error_msg
+      });
+      return parsed; // Возвращаем с ошибкой для обработки выше
+    }
+    
+    return parsed;
+  } catch (e) {
+    if (retryCount < 3) {
+      const waitTime = Math.pow(2, retryCount) * 1000;
+      logInfo('callVk retry after exception', { 
+        method: method, 
+        retry: retryCount + 1, 
+        waitMs: waitTime, 
+        error: e.message || String(e) 
+      });
+      Utilities.sleep(waitTime);
+      return callVk(method, params, retryCount + 1);
+    }
+    
+    logError('callVk:' + method + ' Exception', e, params);
+    return null;
+  }
+}
+
+// ✅ УЛУЧШЕННАЯ ПРОВЕРКА ДУБЛИКАТОВ
+function isDuplicateEvent(payload) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) {
+      logError('isDuplicateEvent', 'Cache unavailable', 'CacheService is null');
+      return false; // Не блокируем при недоступности кэша
+    }
+    
+    const eventId = payload.event_id || buildEventId(payload);
+    const key = getCachePrefix() + eventId;
+    
+    const cached = cache.get(key);
+    if (cached) {
+      logInfo('Duplicate event detected', { 
+        eventId: eventId.substring(0, 20), 
+        type: payload.type 
+      });
+      return true;
+    }
+    
+    cache.put(key, '1', CACHE_TTL_SECONDS);
+    return false;
+  } catch (e) {
+    logError('isDuplicateEvent', e, payload.type);
+    return false; // ✅ НЕ блокируем при ошибке кэша
+  }
+}
+
+// ✅ УЛУЧШЕННАЯ ГЕНЕРАЦИЯ EVENT ID
+function buildEventId(payload) {
+  // Используем комбинацию полей для уникальности
+  const timestamp = (payload.object && payload.object.date) || Math.floor(Date.now() / 1000);
+  const type = payload.type || 'unknown';
+  const objectId = (payload.object && payload.object.id) || '';
+  const userId = (payload.object && payload.object.from_id) || '';
+  
+  const uniqueStr = [type, timestamp, objectId, userId].join(':');
+  
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.MD5, 
+    uniqueStr
+  );
+  
+  return Utilities.base64Encode(digest);
+}
+
 function processQueue() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
@@ -340,17 +477,6 @@ function sendAdminSummaryIfNeeded() {
   setSetting('SUMMARY_SENT_AT', String(new Date().getTime()));
 }
 
-function isDuplicateEvent(payload) {
-  const cache = CacheService.getScriptCache();
-  const eventId = payload.event_id || buildEventId(payload);
-  const key = getCachePrefix() + eventId;
-  if (cache.get(key)) {
-    return true;
-  }
-  cache.put(key, '1', CACHE_TTL_SECONDS);
-  return false;
-}
-
 function parseLotFromText(text) {
   if (text.indexOf('#аукцион') === -1) {
     return null;
@@ -374,7 +500,7 @@ function parseLotFromText(text) {
 }
 
 function parseDeadline(text) {
-  const match = text.match(/(\d{1,2})[.\/\-](\d{1,2})(?:[.\/\-](\d{2,4}))?[^\d]*(\d{1,2})[:.](\d{2})/);
+  const match = text.match(/(\d{1,2})[\.\/-](\d{1,2})(?:[\.\/-](\d{2,4}))?[^\d]*(\d{1,2})[:.](\d{2})/);
   if (!match) {
     return null;
   }
@@ -455,50 +581,6 @@ function sendComment(postId, message, replyToCommentId) {
     params.reply_to_comment = replyToCommentId;
   }
   return callVk('wall.createComment', params);
-}
-
-function callVk(method, params, retryCount = 0) {
-  const token = getSetting('VK_TOKEN');
-  if (!token) {
-    logError('callVk', 'VK_TOKEN не задан', method);
-    return null;
-  }
-  const payload = Object.assign({}, params, {
-    access_token: token,
-    v: API_VERSION
-  });
-  
-  try {
-    const response = UrlFetchApp.fetch('https://api.vk.com/method/' + method, {
-      method: 'post',
-      payload: payload,
-      muteHttpExceptions: true
-    });
-    const body = response.getContentText();
-    const parsed = JSON.parse(body);
-    
-    if (parsed.error) {
-      if (parsed.error.error_code === 6 || parsed.error.error_code === 10) { // Too many requests or Server error
-        if (retryCount < 3) {
-          const waitTime = Math.pow(2, retryCount) * 1000;
-          logInfo('callVk retry', { method: method, retry: retryCount + 1, waitMs: waitTime, error: parsed.error });
-          Utilities.sleep(waitTime);
-          return callVk(method, params, retryCount + 1);
-        }
-      }
-      logError('callVk:' + method, parsed.error, params);
-    }
-    return parsed;
-  } catch (e) {
-    if (retryCount < 3) {
-      const waitTime = Math.pow(2, retryCount) * 1000;
-      logInfo('callVk retry after exception', { method: method, retry: retryCount + 1, waitMs: waitTime, error: e.message || String(e) });
-      Utilities.sleep(waitTime);
-      return callVk(method, params, retryCount + 1);
-    }
-    logError('callVk:' + method + ' Exception', e, params);
-    return null;
-  }
 }
 
 function formatDate(dateValue) {
