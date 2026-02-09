@@ -7,9 +7,11 @@ const CACHE_TTL_SECONDS = 21600;
 const OUTBID_MESSAGE = 'Ваша ставка перебита';
 const LOT_NOT_SOLD_MESSAGE = 'Лот не продан';
 
-// ✅ ПРАВИЛЬНАЯ ФУНКЦИЯ VK API
+// ✅ ПРАВИЛЬНАЯ ФУНКЦИЯ VK API С ПОЛНЫМ ЛОГИРОВАНИЕМ
 function callVk(method, params, retryCount = 0) {
+  const debugMode = getSetting('DEBUG_VK_API') === 'TRUE';
   const token = getSetting('VK_TOKEN');
+  
   if (!token) {
     logError('callVk', 'VK_TOKEN не задан', method);
     return null;
@@ -33,6 +35,8 @@ function callVk(method, params, retryCount = 0) {
     .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(cleanParams[k]))
     .join('&');
   
+  const url = 'https://api.vk.com/method/' + method;
+  
   const options = {
     method: 'post',
     contentType: 'application/x-www-form-urlencoded',
@@ -40,9 +44,43 @@ function callVk(method, params, retryCount = 0) {
     muteHttpExceptions: true
   };
   
+  // 🔍 ЛОГИРОВАНИЕ ЗАПРОСА
+  if (debugMode) {
+    const sanitizedParams = {};
+    for (const key in cleanParams) {
+      if (key === 'access_token') {
+        sanitizedParams[key] = cleanParams[key].substring(0, 10) + '...[HIDDEN]';
+      } else {
+        sanitizedParams[key] = cleanParams[key];
+      }
+    }
+    
+    logInfo('🚀 VK API REQUEST', {
+      method: method,
+      url: url,
+      params: sanitizedParams,
+      retry: retryCount
+    });
+  }
+  
   try {
-    const response = UrlFetchApp.fetch('https://api.vk.com/method/' + method, options);
+    const startTime = new Date().getTime();
+    const response = UrlFetchApp.fetch(url, options);
+    const responseTime = new Date().getTime() - startTime;
+    const statusCode = response.getResponseCode();
     const body = response.getContentText();
+    
+    // 🔍 ЛОГИРОВАНИЕ ОТВЕТА
+    if (debugMode) {
+      logInfo('📥 VK API RESPONSE', {
+        method: method,
+        status: statusCode,
+        responseTime: responseTime + 'ms',
+        bodyLength: body.length,
+        bodyPreview: body.substring(0, 500)
+      });
+    }
+    
     const parsed = JSON.parse(body);
     
     if (parsed.error) {
@@ -50,7 +88,7 @@ function callVk(method, params, retryCount = 0) {
       if (parsed.error.error_code === 6 || parsed.error.error_code === 10) {
         if (retryCount < 3) {
           const waitTime = Math.pow(2, retryCount) * 1000;
-          logInfo('callVk retry', { 
+          logInfo('⌛ callVk retry', { 
             method: method, 
             retry: retryCount + 1, 
             waitMs: waitTime, 
@@ -61,19 +99,29 @@ function callVk(method, params, retryCount = 0) {
         }
       }
       
-      logError('callVk:' + method, parsed.error, {
-        params: Object.keys(params).join(','),
+      logError('❌ callVk ERROR: ' + method, parsed.error, {
+        sentParams: Object.keys(params).join(', '),
         error_code: parsed.error.error_code,
-        error_msg: parsed.error.error_msg
+        error_msg: parsed.error.error_msg,
+        request_params: parsed.error.request_params || 'none'
       });
+      
       return parsed; // Возвращаем с ошибкой для обработки выше
     }
     
+    if (debugMode) {
+      logInfo('✅ VK API SUCCESS', {
+        method: method,
+        hasResponse: !!parsed.response
+      });
+    }
+    
     return parsed;
+    
   } catch (e) {
     if (retryCount < 3) {
       const waitTime = Math.pow(2, retryCount) * 1000;
-      logInfo('callVk retry after exception', { 
+      logInfo('⌛ callVk retry after exception', { 
         method: method, 
         retry: retryCount + 1, 
         waitMs: waitTime, 
@@ -83,7 +131,11 @@ function callVk(method, params, retryCount = 0) {
       return callVk(method, params, retryCount + 1);
     }
     
-    logError('callVk:' + method + ' Exception', e, params);
+    logError('❌ callVk EXCEPTION: ' + method, e, {
+      message: e.message || String(e),
+      stack: e.stack || 'no stack',
+      sentParams: params
+    });
     return null;
   }
 }
@@ -102,7 +154,7 @@ function isDuplicateEvent(payload) {
     
     const cached = cache.get(key);
     if (cached) {
-      logInfo('Duplicate event detected', { 
+      logInfo('🔁 Duplicate event detected', { 
         eventId: eventId.substring(0, 20), 
         type: payload.type 
       });
