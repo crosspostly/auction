@@ -1,29 +1,128 @@
-name: Deploy to Google Apps Script with Clasp
+name: Deploy to Google Apps Script
 
 on:
   push:
     branches:
       - main
+    paths:
+      - '**.gs'
+      - '**.js'
+      - 'appsscript.json'
+      - '.clasp.json'
+  workflow_dispatch:  # Позволяет запускать вручную
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Install Clasp
-        run: npm install -g @google/clasp
+      - name: 📦 Install Clasp
+        run: |
+          npm install -g @google/clasp
+          clasp --version
 
-      - name: Authenticate Clasp
-        run: echo '${{ secrets.CLASP_JSON }}' > ~/.clasprc.json
+      - name: 🔐 Validate CLASP_JSON secret
+        run: |
+          if [ -z "${{ secrets.CLASP_JSON }}" ]; then
+            echo "❌ ERROR: CLASP_JSON secret is not set!"
+            echo "Please add CLASP_JSON to repository secrets."
+            exit 1
+          fi
+          echo "✅ CLASP_JSON secret is set"
+
+      - name: 🔑 Authenticate Clasp
+        run: |
+          echo "Creating .clasprc.json..."
+          echo '${{ secrets.CLASP_JSON }}' > ~/.clasprc.json
+          
+          # Проверка валидности JSON
+          if ! jq empty ~/.clasprc.json 2>/dev/null; then
+            echo "❌ ERROR: CLASP_JSON is not valid JSON!"
+            exit 1
+          fi
+          
+          echo "✅ Authentication configured"
         shell: bash
 
-      - name: Push to Google Apps Script
-        run: clasp push
+      - name: 📋 Check .clasp.json
+        run: |
+          if [ ! -f ".clasp.json" ]; then
+            echo "⚠️  WARNING: .clasp.json not found in repository"
+            echo "You need to run 'clasp create' or 'clasp clone' locally first"
+            echo "Then commit .clasp.json to the repository"
+            exit 1
+          fi
+          
+          echo "✅ .clasp.json found"
+          echo "Script ID:"
+          cat .clasp.json | jq -r '.scriptId'
         shell: bash
+
+      - name: 🔍 Verify files to push
+        run: |
+          echo "📂 Files that will be pushed:"
+          ls -la *.gs *.json 2>/dev/null || echo "No .gs or .json files found"
+          
+          echo ""
+          echo "📄 appsscript.json content:"
+          cat appsscript.json
+        shell: bash
+
+      - name: 🚀 Push to Google Apps Script
+        id: push
+        run: |
+          echo "Starting push to Google Apps Script..."
+          
+          # Проверка статуса перед push
+          if ! clasp status; then
+            echo "⚠️  WARNING: clasp status failed, but continuing..."
+          fi
+          
+          # Push с force чтобы перезаписать удаленные изменения
+          if clasp push --force; then
+            echo "✅ Successfully pushed to Google Apps Script!"
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to push to Google Apps Script"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        shell: bash
+
+      - name: 📊 Deployment Summary
+        if: always()
+        run: |
+          echo "## 📊 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit Message**: ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Author**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.push.outputs.success }}" = "true" ]; then
+            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+        shell: bash
+
+      - name: ❌ Deployment Failed Notification
+        if: failure()
+        run: |
+          echo "::error::Deployment to Google Apps Script failed!"
+          echo "::error::Check the logs above for details"
+          echo "::error::Common issues:"
+          echo "::error::1. CLASP_JSON secret is invalid or expired"
+          echo "::error::2. .clasp.json is missing or has wrong scriptId"
+          echo "::error::3. No permission to access the script"
