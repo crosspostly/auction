@@ -132,17 +132,23 @@ function getSettings() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get("settings");
   if (cached) return JSON.parse(cached);
-  
+
   const values = getSheet("Settings").getDataRange().getValues();
   const settings = { ...DEFAULT_SETTINGS };
-  if (values.length > 1) {
-    values.slice(1).forEach(row => { if (row[0]) settings[row[0]] = parseSettingValue(row[1]); });
-  }
   
+  // Обновляем только те настройки, которые имеют непустые значения
+  if (values.length > 1) {
+    values.slice(1).forEach(row => { 
+      if (row[0] && row[1] !== "" && row[1] !== null && row[1] !== undefined) {
+        settings[row[0]] = parseSettingValue(row[1]); 
+      }
+    });
+  }
+
   const props = PropertiesService.getScriptProperties().getProperties();
   const keys = ["VK_TOKEN", "GROUP_ID", "CONFIRMATION_CODE", "VK_SECRET", "PAYMENT_PHONE", "PAYMENT_BANK", "WEB_APP_URL"];
   keys.forEach(k => { if (props[k]) settings[k] = props[k]; });
-  
+
   cache.put("settings", JSON.stringify(settings), 300);
   return settings;
 }
