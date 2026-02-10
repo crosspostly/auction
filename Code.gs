@@ -440,8 +440,11 @@ function validateBid(bid, lot) {
   
   // Проверка минимальной ставки
   const currentPrice = Number(lot.current_price || lot.start_price || 0);
-  if (bid <= currentPrice) {
-    return { isValid: false, reason: `Ставка должна быть выше ${currentPrice}` };
+  const minBidIncrement = settings.min_bid_increment !== undefined && settings.min_bid_increment !== "" ? Number(settings.min_bid_increment) : 50;
+  const minimumRequiredBid = currentPrice + minBidIncrement;
+  
+  if (bid < minimumRequiredBid) {
+    return { isValid: false, reason: `Ставка должна быть не менее ${minimumRequiredBid} (текущая цена ${currentPrice} + минимальный шаг ${minBidIncrement})` };
   }
   
   // Проверка шага ставки
