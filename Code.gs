@@ -82,11 +82,7 @@ function doPost(e) {
 
     }
 
-
-
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
-
-
 
   } catch (error) {
 
@@ -95,100 +91,6 @@ function doPost(e) {
     // Always return "ok" even on error, so VK doesn't disable the server.
 
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
-
-  }
-
-}
-
-
-
-/**
-
- * Adds a new event to the EventQueue sheet for asynchronous processing.
-
- * @param {string} payload The JSON string payload from the VK event.
-
- */
-
-function enqueueEvent(payload) {
-
-  try {
-
-    appendRow("EventQueue", {
-
-      eventId: Utilities.getUuid(),
-
-      payload: payload,
-
-      status: "pending",
-
-      receivedAt: new Date()
-
-    });
-
-  } catch (e) {
-
-    logError('enqueueEvent_failed', e, payload);
-
-  }
-
-}
-
-
-
-/**
-
- * Processes events from the EventQueue sheet.
-
- * This function is meant to be run by a time-based trigger.
-
- */
-
-function processEventQueue() {
-
-  const lock = LockService.getScriptLock();
-
-  if (!lock.tryLock(10000)) {
-
-    console.log("processEventQueue is already running.");
-
-    return;
-
-  }
-
-  
-
-  try {
-
-    const events = getSheetData("EventQueue");
-
-    const pendingEvents = events.filter(r => r.data.status === 'pending');
-
-
-
-    for (const event of pendingEvents) {
-
-      try {
-
-        const payload = JSON.parse(event.data.payload);
-
-        routeEvent(payload); // Process the event
-
-        updateRow("EventQueue", event.rowIndex, { status: "processed" });
-
-      } catch (e) {
-
-        logError('processEvent_failed', e, event.data.payload);
-
-        updateRow("EventQueue", event.rowIndex, { status: "failed" });
-
-      }
-
-    }
-
-  } finally {
-
-    lock.releaseLock();
 
   }
 
@@ -2081,24 +1983,21 @@ function testVkApiConnection() {
 
     // 1. Проверка информации о группе
 
-    const groupInfo = callVk('groups.getById', { group_id: groupId });
-
-    if (groupInfo && groupInfo.response && groupInfo.response.length > 0) {
-
-      results.push('✅ Группа: ' + groupInfo.response[0].name);
-
-    } else if (groupInfo && groupInfo.response && groupInfo.response.length === 0) {
-
-      results.push('❌ Группа с ID ' + groupId + ' не найдена.');
-
-    } else if (groupInfo && groupInfo.error) {
-
-      results.push('❌ Ошибка группы: ' + groupInfo.error.error_msg);
-
-    } else {
-
-      results.push('❌ Нет ответа от VK API при запросе информации о группе.');
-
+    let groupInfo;
+    try {
+      groupInfo = callVk('groups.getById', { group_id: groupId });
+      if (groupInfo && groupInfo.response && groupInfo.response.length > 0) {
+        results.push('✅ Группа: ' + groupInfo.response[0].name);
+      } else if (groupInfo && groupInfo.response && groupInfo.response.length === 0) {
+        results.push('❌ Группа с ID ' + groupId + ' не найдена.');
+      } else if (groupInfo && groupInfo.error) {
+        results.push('❌ Ошибка группы: ' + groupInfo.error.error_msg);
+      } else {
+        results.push('❌ Нет ответа от VK API при запросе информации о группе.');
+      }
+    } catch (e) {
+      results.push('❌ Исключение при проверке группы: ' + e.message);
+      logError('testVkApiConnection_groupInfo', e);
     }
 
 
@@ -2106,33 +2005,25 @@ function testVkApiConnection() {
     // 2. Проверка Callback серверов
 
     results.push('\n--- Проверка Callback Сервера ---');
-
     results.push('ℹ️ URL в настройках: ' + webAppUrl);
-
-    const servers = callVk('groups.getCallbackServers', { group_id: groupId });
-
-    if (servers && servers.response && servers.response.items) {
-
-      results.push('📡 Всего серверов в ВК: ' + servers.response.count);
-
-      const myServer = servers.response.items.find(s => s.url === webAppUrl);
-
-      if (myServer) {
-
-        results.push('✅ Ваш сервер НАЙДЕН в списке VK!');
-
-        results.push('  Статус: ' + myServer.status);
-
+    let servers;
+    try {
+      servers = callVk('groups.getCallbackServers', { group_id: groupId });
+      if (servers && servers.response && servers.response.items) {
+        results.push('📡 Всего серверов в ВК: ' + servers.response.count);
+        const myServer = servers.response.items.find(s => s.url === webAppUrl);
+        if (myServer) {
+          results.push('✅ Ваш сервер НАЙДЕН в списке VK!');
+          results.push('  Статус: ' + myServer.status);
+        } else {
+          results.push('❌ ВНИМАНИЕ: URL из настроек НЕ НАЙДЕН среди серверов ВК!');
+        }
       } else {
-
-        results.push('❌ ВНИМАНИЕ: URL из настроек НЕ НАЙДЕН среди серверов ВК!');
-
+        results.push('⚠️ Не удалось получить список серверов от ВК.');
       }
-
-    } else {
-
-      results.push('⚠️ Не удалось получить список серверов от ВК.');
-
+    } catch (e) {
+      results.push('❌ Исключение при проверке серверов: ' + e.message);
+      logError('testVkApiConnection_servers', e);
     }
 
     
@@ -2141,11 +2032,18 @@ function testVkApiConnection() {
 
     
 
-    ui.alert('Результаты тестирования:\n\n' + results.join('\n'));
+    ui.alert('Результаты тестирования:
+
+' + results.join('
+'));
 
   } catch (e) {
 
-    ui.alert('❌ Критическая ошибка теста:\n' + e.message + '\n\n' + results.join('\n'));
+    ui.alert('❌ Критическая ошибка теста:
+' + e.message + '
+
+' + results.join('
+'));
 
     logError('testVkApiConnection', e, results);
 
