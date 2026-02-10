@@ -323,8 +323,26 @@ function handleWallReplyNew(payload) {
             Monitoring.recordEvent('OUTBID_NOTIFICATION_QUEUED', notification);
 
             // Отправляем комментарий под постом о перебитой ставке
-            const outbidCommentMessage = `[id${currentLot.leader_id}|${getUserName(currentLot.leader_id)}], Ваша ставка перебита! Новая ставка: ${bid}₽`;
-            postCommentToLot(parsePostKey(postKey).postId, outbidCommentMessage);
+            const outbidCommentMessage = `Ваша ставка перебита! Новая ставка: ${bid}₽`;
+            // Отвечаем на последний комментарий предыдущего лидера (если известен ID комментария)
+            const bidsForLot = getSheetData("Bids").filter(b => b.data.lot_id === currentLot.lot_id && b.data.user_id === currentLot.leader_id);
+            if (bidsForLot.length > 0) {
+              // Находим последнюю ставку от предыдущего лидера
+              const latestBid = bidsForLot.reduce((latest, current) => 
+                new Date(current.data.timestamp) > new Date(latest.data.timestamp) ? current : latest
+              );
+              
+              if (latestBid && latestBid.data.comment_id) {
+                // Отвечаем на конкретный комментарий
+                replyToComment(parsePostKey(postKey).postId, latestBid.data.comment_id, outbidCommentMessage);
+              } else {
+                // Если не знаем ID комментария, просто публикуем под постом
+                postCommentToLot(parsePostKey(postKey).postId, `[id${currentLot.leader_id}|${getUserName(currentLot.leader_id)}], ${outbidCommentMessage}`);
+              }
+            } else {
+              // Если нет информации о ставках предыдущего лидера, публикуем под постом
+              postCommentToLot(parsePostKey(postKey).postId, `[id${currentLot.leader_id}|${getUserName(currentLot.leader_id)}], ${outbidCommentMessage}`);
+            }
           }
   } finally {
     lock.releaseLock();
@@ -484,9 +502,32 @@ function finalizeAuction() {
         allWinnersData.push(winnerData); // Добавляем данные победителя в массив
         const notification = { user_id: lot.leader_id, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
         queueNotification(notification);
-        const today = new Date();
-        const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-        postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+        // Находим комментарий победителя с его последней ставкой
+        const bidsForWinner = getSheetData("Bids").filter(b => b.data.lot_id === lot.lot_id && b.data.user_id === lot.leader_id);
+        if (bidsForWinner.length > 0) {
+          // Находим последнюю ставку победителя
+          const latestBid = bidsForWinner.reduce((latest, current) => 
+            new Date(current.data.timestamp) > new Date(latest.data.timestamp) ? current : latest
+          );
+          
+          if (latestBid && latestBid.data.comment_id) {
+            // Отвечаем на комментарий победителя
+            const today = new Date();
+            const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+            const winnerComment = `Поздравляем с победой в аукционе за миниатюру! Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`;
+            replyToComment(postId, latestBid.data.comment_id, winnerComment);
+          } else {
+            // Если не знаем ID комментария победителя, публикуем под постом
+            const today = new Date();
+            const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+            postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+          }
+        } else {
+          // Если нет информации о ставках победителя, публикуем под постом
+          const today = new Date();
+          const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+          postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+        }
         updateLot(lot.lot_id, { status: "sold" });
         Monitoring.recordEvent('WINNER_DECLARED', winnerData);
       }
