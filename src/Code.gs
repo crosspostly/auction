@@ -151,10 +151,10 @@ function handleWallPostNew(payload) {
   const text = payload.object && payload.object.text ? String(payload.object.text) : "";
   if (!/#аукцион/i.test(text)) return;
   const lot = parseLotFromPost(text);
-  if (!lot) { 
+  if (!lot) {
     Monitoring.recordEvent('LOT_PARSE_FAILED', { text: text.substring(0, 100) });
-    logInfo("Пост не распаршен", text.substring(0, 50)); 
-    return; 
+    logInfo("Пост не распаршен", text.substring(0, 50));
+    return;
   }
   const newLotData = { lot_id: String(lot.lot_id), post_id: `${payload.object.owner_id}_${payload.object.id}`, name: lot.name, start_price: lot.start_price, current_price: lot.start_price, leader_id: "", status: "active", created_at: new Date(), deadline: lot.deadline || new Date(new Date().getTime() + 7*24*60*60*1000), bid_step: lot.bidStep || 0 };
   upsertLot(newLotData);
@@ -270,6 +270,7 @@ function handleWallReplyNew(payload) {
       }
       return;
     }
+
     // Записываем ставку в лист "Ставки" до обновления "Лотов"
     appendRow("Bids", {
       bid_id: Utilities.getUuid(),
@@ -340,7 +341,7 @@ function processNotificationQueue() {
   for (const row of rows) {
     if (sent >= 20) break;
     if (row.data.status !== "pending") continue;
-    try { sendNotification(row.data); updateNotificationStatus(row.data.queue_id, "sent", new Date()); sent++; Utilities.sleep(350); } 
+    try { sendNotification(row.data); updateNotificationStatus(row.data.queue_id, "sent", new Date()); sent++; Utilities.sleep(350); }
     catch (error) { updateNotificationStatus(row.data.queue_id, "failed", new Date()); }
   }
 }
@@ -360,9 +361,9 @@ function finalizeAuction() {
     activeLots.forEach(row => {
       const lot = row.data;
       const postId = parsePostKey(lot.post_id).postId;
-      if (!lot.leader_id) { 
-        updateLot(lot.lot_id, { status: "unsold" }); 
-        postCommentToLot(postId, "❌ Лот не продан"); 
+      if (!lot.leader_id) {
+        updateLot(lot.lot_id, { status: "unsold" });
+        postCommentToLot(postId, "❌ Лот не продан");
         Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
       }
       else {
@@ -402,6 +403,7 @@ function finalizeAuction() {
           logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
           return;
         }
+
         // Группируем победителей по пользователю
         const winnersGroupedByUser = winners.reduce((acc, winner) => {
           if (!acc[winner.winner_id]) {
@@ -500,6 +502,7 @@ function testVkApiConnection() {
       results.push('❌ Исключение при проверке группы: ' + e.message);
       logError('testVkApiConnection_groupInfo', e);
     }
+
     // 2. Проверка Callback серверов
     results.push('\n--- Проверка Callback Сервера ---');
     results.push('ℹ️ URL в настройках: ' + webAppUrl);
@@ -522,6 +525,7 @@ function testVkApiConnection() {
       results.push('❌ Исключение при проверке серверов: ' + e.message);
       logError('testVkApiConnection_servers', e);
     }
+
     // 3. Проверка токена
     results.push('\n--- Проверка токена ---');
     if (settings.VK_TOKEN) {

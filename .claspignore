@@ -29,3 +29,7 @@ debug_vk.py
 # Ignore clasp files
 .clasp.json
 .clasprc.json
+
+# Ignore JS files that are not for Apps Script
+Code_check.js
+publish.js
