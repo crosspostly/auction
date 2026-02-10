@@ -894,7 +894,6 @@ function parseLotFromPost(text) {
 
 
 
-    }
 
 
 
@@ -1977,9 +1976,10 @@ function testVkApiConnection() {
 
   try {
 
-    // ... (rest of the function is the same)
-
-    
+    // Получаем настройки
+    const settings = getSettings();
+    const groupId = getVkGroupId();
+    const webAppUrl = settings.WEB_APP_URL || ScriptApp.getService().getUrl();
 
     // 1. Проверка информации о группе
 
@@ -1999,8 +1999,6 @@ function testVkApiConnection() {
       results.push('❌ Исключение при проверке группы: ' + e.message);
       logError('testVkApiConnection_groupInfo', e);
     }
-
-
 
     // 2. Проверка Callback серверов
 
@@ -2026,24 +2024,19 @@ function testVkApiConnection() {
       logError('testVkApiConnection_servers', e);
     }
 
-    
+    // 3. Проверка токена
+    results.push('\n--- Проверка токена ---');
+    if (settings.VK_TOKEN) {
+      results.push('✅ Токен установлен');
+    } else {
+      results.push('❌ Токен НЕ установлен');
+    }
 
-    // ... (rest of the function is the same)
-
-    
-
-    ui.alert('Результаты тестирования:
-
-' + results.join('
-'));
+    ui.alert('Результаты тестирования:\n\n' + results.join('\n'));
 
   } catch (e) {
 
-    ui.alert('❌ Критическая ошибка теста:
-' + e.message + '
-
-' + results.join('
-'));
+    ui.alert('❌ Критическая ошибка теста:\n' + e.message + '\n\n' + results.join('\n'));
 
     logError('testVkApiConnection', e, results);
 
