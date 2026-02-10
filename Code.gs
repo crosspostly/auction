@@ -108,7 +108,7 @@ function setupDefaultSettings() {
   const existingSettings = {};
   if (values.length > 1) {
     values.slice(1).forEach(row => {
-      if (row[0]) existingSettings[row[0]] = row[1];
+      if (row[0]) existingSettings[row[0]] = { value: row[1], description: row[2] };
     });
   }
   
@@ -146,21 +146,23 @@ function setupDefaultSettings() {
     'ADMIN_IDS': 'VK ID администраторов через запятую (например, 12345,67890)'
   };
   
-  // Добавляем недостающие настройки
+  // Обновляем все настройки - добавляем недостающие и обновляем описания
   for (const [key, defaultValue] of Object.entries(defaultSettings)) {
-    if (!(key in existingSettings)) {
-      // Найдем свободную строку или добавим новую
-      let found = false;
-      for (let i = 1; i < values.length; i++) {
-        if (values[i][0] === key) {
-          found = true;
-          break;
+    let found = false;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][0] === key) {
+        found = true;
+        // Обновляем описание, если его нет или оно пустое
+        if (!values[i][2] || values[i][2] === "") {
+          settingsSheet.getRange(i + 1, 3).setValue(descriptions[key] || "");
         }
+        break;
       }
-      
-      if (!found) {
-        settingsSheet.appendRow([key, defaultValue, descriptions[key] || ""]);
-      }
+    }
+    
+    if (!found) {
+      // Добавляем новую настройку
+      settingsSheet.appendRow([key, defaultValue, descriptions[key] || ""]);
     }
   }
   
