@@ -167,7 +167,7 @@ function setupDefaultSettings() {
   // Очищаем кэш настроек
   CacheService.getScriptCache().remove("settings");
 }
-function showInstructions() { SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutputFromFile('Instructions').setTitle('Инструкция')); }
+function showInstructions() { SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutputFromFile('SimpleInstructions').setTitle('Инструкция')); }
 function showAuthSettings() { SpreadsheetApp.getUi().showModelessDialog(HtmlService.createHtmlOutputFromFile('Login').setWidth(350).setHeight(300), 'Вход'); }
 function openSettingsDialog() { SpreadsheetApp.getUi().showModelessDialog(HtmlService.createHtmlOutputFromFile('AuthSettings').setWidth(450).setHeight(650), 'Настройки'); }
 function getAuthStatus() {
