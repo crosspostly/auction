@@ -338,17 +338,34 @@ function validateBid(bid, lot) {
   if (lot.deadline && new Date() > new Date(lot.deadline)) {
     return { isValid: false, reason: "Аукцион завершен" };
   }
-    const settings = getSettings();
-    if (settings.max_bid && bid > settings.max_bid) {
-      return { isValid: false, reason: `Ставка превышает максимально допустимую (${settings.max_bid})` };
-    }
-    const currentPrice = Number(lot.current_price || lot.start_price || 0);
+  
+  const settings = getSettings();
+  
+  // Проверка максимальной ставки
+  if (settings.max_bid && bid > settings.max_bid) {
+    return { isValid: false, reason: `Ставка превышает максимально допустимую (${settings.max_bid})` };
+  }
+  
+  // Проверка минимальной ставки
+  const currentPrice = Number(lot.current_price || lot.start_price || 0);
   if (bid <= currentPrice) {
     return { isValid: false, reason: `Ставка должна быть выше ${currentPrice}` };
   }
-  if (settings.bid_step_enabled && (bid - Number(lot.start_price)) % Number(settings.bid_step || 50) !== 0) {
-    return { isValid: false, reason: `Ставка не кратна шагу ${settings.bid_step}` };
+  
+  // Проверка шага ставки
+  if (settings.bid_step_enabled) {
+    const bidStep = settings.bid_step !== undefined && settings.bid_step !== "" ? Number(settings.bid_step) : 50;
+    
+    // Проверяем, что ставка кратна шагу
+    // Формула: (ставка - стартовая цена) должна быть кратна шагу ставки
+    const priceDiff = bid - Number(lot.start_price);
+    const remainder = priceDiff % bidStep;
+    
+    if (remainder !== 0) {
+      return { isValid: false, reason: `Ставка не кратна шагу ${bidStep}` };
+    }
   }
+  
   return { isValid: true, reason: null };
 }
 
