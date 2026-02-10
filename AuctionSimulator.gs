@@ -4,16 +4,19 @@
  */
 
 const SIMULATOR_SETTINGS = {
-  // The user token to post comments. IMPORTANT: This user must be a member of the group.
-  userToken: "vk1.a.H6v5lstlQKqsJCa1MCSaHPaw4nGVkk9s_3xnDwGNFyIxum45n_uN7vLhPgGThdMegQlhTk2MZBRBY41Fb98x6qrXXntyzduHCI2-PUe3GlMfGLvN8CY5AeJkgv4wXEp252JcmzeuoMJ9y57DcDDdf3mdzonQ8nhlQXGRlLKqhl-ancCOBVC1gIP0tGbdFjQICNBb1Zqwj1on6tH59QIr2A",
+  // Массив тестовых пользователей для симуляции различных ставок.
+  // ВНИМАНИЕ: Это заглушки токенов и ID. В реальной работе нужны настоящие.
+  testUsers: [
+    { id: "11111111", token: "vk1.a.dummy_user_token_1" },
+    { id: "22222222", token: "vk1.a.dummy_user_token_2" },
+    { id: "33333333", token: "vk1.a.dummy_user_token_3" }
+  ],
   // Maximum number of posts the hourly trigger will create before stopping.
   maxPosts: 5,
   // Number of comments to post for each lot.
   commentsPerLot: { min: 10, max: 30 },
   // Delay between comments in milliseconds.
-  commentDelayMs: { min: 2000, max: 10000 },
-  // The ID of the user account corresponding to the token above.
-  testUserId: "11813721"
+  commentDelayMs: { min: 2000, max: 10000 }
 };
 
 // --- SIMULATOR CONTROL FUNCTIONS ---
@@ -36,11 +39,35 @@ function runSingleSimulation() {
   
   // 1. Create a new lot post
   const lotId = `SIM_${Utilities.getUuid().substring(0, 8)}`;
-  const startPrice = 100;
-  const postText = `#аукцион
-Симуляция. Лот №${lotId}
-Старт: ${startPrice}₽
-Шаг: 50₽`;
+  const startPrice = 150;
+  const bidStep = 50; // Добавляем bidStep для использования в шаблоне
+  const deadlineDate = new Date();
+  deadlineDate.setDate(deadlineDate.getDate() + 7); // Через 7 дней от текущей даты
+  deadlineDate.setHours(21, 0, 0, 0); // 21:00 по МСК
+  
+  const day = ("0" + deadlineDate.getDate()).slice(-2);
+  const month = ("0" + (deadlineDate.getMonth() + 1)).slice(-2);
+  const year = deadlineDate.getFullYear();
+  const hours = ("0" + deadlineDate.getHours()).slice(-2);
+  const minutes = ("0" + deadlineDate.getMinutes()).slice(-2);
+
+  const postText = `#аукцион@dndpotustoronu №${lotId}
+При поддержке GABRIGAME-WORKSHOP!
+Дедлайн ${day}.${month}.${year} в ${hours}:${minutes} по МСК!
+🎁Лот - на картинке. + миниатюра идет с красивой, текстурной базой.
+
+👀Старт ${startPrice}р и шаг - ${bidStep}р.
+Каждая миниатюра аукциона масштабом 32-35мм.
+ПОДАРОК ТОМУ, КТО ЗАБЕРЁТ ЗА ДЕНЬ БОЛЬШЕ ВСЕГО МИНИАТЮР!
+Дата окончания аукциона ${day}.${month}.${year} (суббота) в ${hours}:${minutes} по Москве.
+
+В случае, если за 10 минут (или меньше) до окончания аукциона делается ставка, например, в 20:59, аукцион на данный лот продлевается на 10 минут - до 21:09. Начиная с 20:50, продление на 10 минут происходит с каждой новой ставкой.
+
+После аукциона пиши ТОЛЬКО в ЛС группы. Опасайся МОШЕННИКОВ пишущих тебе в ЛС. Отправь картинки миниатюр которые выиграл. Напиши Телефон, ФИО, Город, Адрес (пункт СДЭК). И как тебе отправить, Почтой или СДЭКом.
+
+ДОСТАВКА ЗА СЧЁТ ПОБЕДИТЕЛЯ почтой России с отправкой из Волгограда. (До 3 фигурок 450р, дальше уточним). Отправка по четвергам.
+
+Оплата на карту в течение 3 дней после победы.`;
   
   const postResponse = callVk('wall.post', {
     owner_id: `-${getVkGroupId()}`,
@@ -65,6 +92,11 @@ function runSingleSimulation() {
   let currentBid = startPrice;
   
   for (let i = 0; i < commentCount; i++) {
+    const randomUserIndex = Math.floor(Math.random() * SIMULATOR_SETTINGS.testUsers.length);
+    const selectedUser = SIMULATOR_SETTINGS.testUsers[randomUserIndex];
+    const userId = selectedUser.id;
+    const userToken = selectedUser.token;
+
     const scenario = chooseBidScenario(i, currentBid);
     let newBid = 0;
 
@@ -75,7 +107,7 @@ function runSingleSimulation() {
       case 'HIGH_FREQUENCY':
         // Post another comment almost immediately
         const nextBid = currentBid + 100;
-        postCommentAsUser(postId, String(nextBid));
+        postCommentAsUser(postId, String(nextBid), userToken); // Используем токен выбранного пользователя
         Utilities.sleep(1500); // 1.5 second delay
         newBid = currentBid + 150;
         i++; // Count this as an extra comment
@@ -91,10 +123,10 @@ function runSingleSimulation() {
         break;
     }
 
-    postCommentAsUser(postId, String(newBid));
-    L('Comment posted.', { scenario: scenario, bid: newBid });
+    postCommentAsUser(postId, String(newBid), userToken); // Используем токен выбранного пользователя
+    L('Comment posted.', { scenario: scenario, bid: newBid, userId: userId });
     
-    if (newBid > currentBid) {
+    if (scenario === 'VALID_BID' || scenario === 'HIGH_FREQUENCY') {
       currentBid = newBid;
     }
     
@@ -106,20 +138,20 @@ function runSingleSimulation() {
 }
 
 function chooseBidScenario(index, currentBid) {
-  if (index % 5 === 1) return 'HIGH_FREQUENCY';
-  if (index % 5 === 2 && currentBid > 100) return 'LOWER_BID';
-  if (index % 5 === 3) return 'SAME_BID';
-  if (index % 5 === 4) return 'INVALID_STEP';
-  return 'VALID_BID';
+  // Более частые сценарии для тестирования новых функций
+  if (index % 4 === 0) return 'VALID_BID'; // Каждая 4-я ставка - валидная
+  if (index % 4 === 1 && currentBid > 100) return 'LOWER_BID'; // Каждая 4-я + 1 - ниже текущей
+  if (index % 4 === 2) return 'INVALID_STEP'; // Каждая 4-я + 2 - не кратна шагу
+  return 'SAME_BID'; // Остальные - равные текущей
 }
 
-function postCommentAsUser(postId, text) {
+function postCommentAsUser(postId, text, token) {
    return callVk('wall.createComment', {
     owner_id: `-${getVkGroupId()}`,
     post_id: postId,
     from_group: 0, // Post as user
     message: text
-  }, SIMULATOR_SETTINGS.userToken); // Use the specific user token
+  }, token); // Use the specific user token
 }
 
 /**
