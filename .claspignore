@@ -1,4 +1,4 @@
-# Ignore everything except .gs files and appsscript.json
+# Include all .gs files and .html files for Apps Script
 !*.gs
 !*.html
 !appsscript.json
@@ -33,3 +33,4 @@ debug_vk.py
 # Ignore JS files that are not for Apps Script
 Code_check.js
 publish.js
+new_publish.js
