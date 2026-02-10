@@ -448,12 +448,39 @@ function sendNotification(queueRow) {
     updateNotificationStatus(queueRow.queue_id, "failed", new Date());
   }
 }
-function buildOutbidMessage(p) { return `🔔 Ваша ставка перебита!\nЛот: ${p.lot_name}\nНовая ставка: ${p.new_bid}₽\nhttps://vk.com/wall${p.post_id}`; }
-function buildWinnerMessage(p) { return `🎉 Вы выиграли лот ${p.lot_name} за ${p.price}₽!\nНапишите "АУКЦИОН".`; }
-function buildLowBidMessage(p) { return `👋 Привет! Твоя ставка ${p.your_bid}₽ по лоту «${p.lot_name}» чуть ниже текущей цены ${p.current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall${p.post_id}`; }
+function buildOutbidMessage(p) { 
+  const settings = getSettings();
+  let template = settings.outbid_notification_template || "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}";
+  return template
+    .replace('{lot_name}', p.lot_name)
+    .replace('{new_bid}', p.new_bid)
+    .replace('{post_id}', p.post_id);
+}
+
+function buildWinnerMessage(p) { 
+  const settings = getSettings();
+  let template = settings.order_summary_template || "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".";
+  return template
+    .replace('{lot_name}', p.lot_name)
+    .replace('{price}', p.price);
+}
+
+function buildLowBidMessage(p) { 
+  const settings = getSettings();
+  let template = settings.low_bid_notification_template || "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}";
+  return template
+    .replace('{your_bid}', p.your_bid)
+    .replace('{lot_name}', p.lot_name)
+    .replace('{current_bid}', p.current_bid)
+    .replace('{post_id}', p.post_id);
+}
 
 function buildSubscriptionRequiredMessage(p) { 
-  return `📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «${p.lot_name}»\nhttps://vk.com/wall${p.post_id}`; 
+  const settings = getSettings();
+  let template = settings.subscription_required_template || "📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}";
+  return template
+    .replace('{lot_name}', p.lot_name)
+    .replace('{post_id}', p.post_id);
 }
 
 /**
