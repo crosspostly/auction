@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_blank">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Roboto', sans-serif;
+        padding: 15px;
+        color: #333;
+        font-size: 13px;
+      }
+      .form-group {
+        margin-bottom: 12px;
+      }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: 500;
+        color: #555;
+      }
+      input[type="text"], input[type="password"] {
+        flex-grow: 1;
+        padding: 6px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-sizing: border-box;
+      }
+      .input-wrapper {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .hint {
+        font-size: 11px;
+        color: #888;
+        margin-top: 2px;
+      }
+      button {
+        background-color: #1976d2;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+      }
+      button.secondary {
+        background-color: #eee;
+        color: #333;
+        border: 1px solid #ddd;
+        padding: 6px 10px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      button.secondary:hover {
+        background-color: #e0e0e0;
+      }
+      button.action {
+        background-color: #4caf50;
+        width: 100%;
+        margin-top: 5px;
+        padding: 10px;
+        font-weight: bold;
+      }
+      button.action:hover {
+        background-color: #388e3c;
+      }
+      button.submit {
+        width: 100%;
+        margin-top: 15px;
+        padding: 10px;
+        font-size: 14px;
+        background-color: #1976d2;
+      }
+      button.submit:hover {
+        background-color: #1565c0;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        text-align: center;
+        min-height: 20px;
+        white-space: pre-wrap;
+      }
+      .section-title {
+        color: #1976d2;
+        font-weight: 700;
+        margin-top: 15px;
+        margin-bottom: 8px;
+        border-bottom: 1px dashed #ddd;
+        padding-bottom: 4px;
+        font-size: 14px;
+      }
+      h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <h3>🔐 Секретные настройки</h3>
+    <form id="authForm" onsubmit="handleFormSubmit(this); return false;">
+      
+      <div class="section-title">🔑 Доступ к VK (API)</div>
+
+      <div class="form-group">
+        <label>Токен доступа (Access Token)</label>
+        <div class="input-wrapper">
+          <input type="password" id="vk_token" name="vk_token" placeholder="••••••••••••">
+        </div>
+        <div class="hint">Вставьте ссылку или токен. Если уже вводили - оставьте пустым.</div>
+      </div>
+
+      <div class="form-group">
+        <label>ID Группы (Group ID)</label>
+        <div class="input-wrapper">
+          <input type="text" id="group_id" name="group_id" placeholder="123456789">
+          <button type="button" class="secondary" onclick="autoGetGroupId()">🔍 Найти ID</button>
+        </div>
+      </div>
+
+      <div class="section-title">🚀 Авто-подключение</div>
+      
+      <div class="form-group">
+        <label>Web App URL</label>
+        <div class="input-wrapper">
+          <input type="text" id="web_app_url" name="web_app_url" placeholder="https://script.google.com/...">
+        </div>
+      </div>
+      
+      <button type="button" class="action" onclick="autoConnect()">🔌 Подключить бота к VK</button>
+      
+      <div class="section-title">💳 Оплата (Реквизиты)</div>
+
+      <div class="form-group">
+        <label>Номер телефона (СБП)</label>
+        <div class="input-wrapper">
+           <input type="text" id="payment_phone" name="payment_phone">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Банк получателя</label>
+        <div class="input-wrapper">
+           <input type="text" id="payment_bank" name="payment_bank">
+        </div>
+      </div>
+      
+      <div class="section-title">🛡️ Смена пароля админа</div>
+      
+      <div class="form-group">
+        <div class="input-wrapper">
+           <input type="password" name="admin_password" placeholder="Новый пароль">
+        </div>
+      </div>
+
+      <button type="submit" id="submitBtn" class="submit">💾 Сохранить всё</button>
+    </form>
+    
+    <div id="status" class="status"></div>
+
+    <script>
+      google.script.run.withSuccessHandler(populateForm).getPublicAuthSettings();
+
+      document.getElementById('vk_token').addEventListener('paste', function(e) {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        const match = text.match(/access_token=([a-zA-Z0-9\.\-_]+)/);
+        this.value = match ? match[1] : text.trim();
+        flashField(this);
+      });
+
+      function autoGetGroupId() {
+        const token = document.getElementById('vk_token').value;
+        const input = document.getElementById('group_id');
+        const btn = event.target;
+        const status = document.getElementById('status');
+
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '...';
+        
+        google.script.run
+          .withSuccessHandler(function(id) {
+             btn.disabled = false;
+             btn.textContent = originalText;
+             input.value = id;
+             flashField(input);
+             status.textContent = '✅ ID группы найден!';
+             status.style.color = 'green';
+          })
+          .withFailureHandler(function(error) {
+             btn.disabled = false;
+             btn.textContent = originalText;
+             status.textContent = '❌ Ошибка: ' + error.message;
+             status.style.color = 'red';
+          })
+          .fetchVkGroupId(token, input.value);
+      }
+
+      function autoConnect() {
+        const form = document.getElementById('authForm');
+        const url = document.getElementById('web_app_url').value;
+        const status = document.getElementById('status');
+        const btn = event.target;
+
+        if (!url) {
+          status.textContent = '❌ Введите Web App URL!';
+          status.style.color = 'red';
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Подключение...';
+        status.textContent = '⏳ Синхронизация с ВК...';
+        
+        // 1. Сохраняем текущие поля
+        google.script.run
+          .withSuccessHandler(() => {
+             // 2. Подключаем
+             google.script.run
+               .withSuccessHandler((res) => {
+                  btn.disabled = false;
+                  btn.textContent = '🔌 Подключить бота к VK';
+                  status.textContent = res;
+                  status.style.color = 'green';
+               })
+               .withFailureHandler((err) => {
+                  btn.disabled = false;
+                  btn.textContent = '🔌 Подключить бота к VK';
+                  status.textContent = '❌ ' + err.message;
+                  status.style.color = 'red';
+               })
+               .connectBotToVk(url);
+          })
+          .saveAuthSettings(form);
+      }
+
+      function flashField(element) {
+        const original = element.style.borderColor;
+        element.style.borderColor = '#2e7d32';
+        element.style.backgroundColor = '#e8f5e9';
+        setTimeout(() => {
+          element.style.borderColor = original;
+          element.style.backgroundColor = '';
+        }, 800);
+      }
+
+      function populateForm(settings) {
+        if (settings.group_id) document.getElementById('group_id').value = settings.group_id;
+        if (settings.web_app_url) document.getElementById('web_app_url').value = settings.web_app_url;
+        if (settings.payment_phone) document.getElementById('payment_phone').value = settings.payment_phone;
+        if (settings.payment_bank) document.getElementById('payment_bank').value = settings.payment_bank;
+      }
+
+      function handleFormSubmit(formObject) {
+        const btn = document.getElementById('submitBtn');
+        const status = document.getElementById('status');
+        btn.disabled = true;
+        btn.textContent = 'Сохранение...';
+        status.textContent = '';
+        
+        google.script.run
+          .withSuccessHandler(function(response) {
+            btn.disabled = false;
+            btn.textContent = '💾 Сохранить всё';
+            status.textContent = '✅ ' + response;
+            status.style.color = 'green';
+            setTimeout(() => google.script.host.close(), 1500);
+          })
+          .withFailureHandler(function(error) {
+            btn.disabled = false;
+            btn.textContent = '💾 Сохранить всё';
+            status.textContent = '❌ ' + error.message;
+            status.style.color = 'red';
+          })
+          .saveAuthSettings(formObject);
+      }
+    </script>
+  </body>
+</html>
