@@ -89,11 +89,83 @@ function runSetupWizard() {
   if (response !== ui.Button.YES) return;
   try {
     setupSheets();
+    setupDefaultSettings();
     createDemoData();
     setupTriggers();
     logInfo("Мастер настройки выполнен");
     ui.alert('✅ Готово!');
   } catch (e) { logError("setup_wizard", e); ui.alert('❌ Ошибка: ' + e.message); }
+}
+
+/**
+ * Устанавливает настройки по умолчанию в лист "Настройки"
+ */
+function setupDefaultSettings() {
+  const settingsSheet = getSheet("Settings");
+  const values = settingsSheet.getDataRange().getValues();
+  
+  // Получаем существующие настройки
+  const existingSettings = {};
+  if (values.length > 1) {
+    values.slice(1).forEach(row => {
+      if (row[0]) existingSettings[row[0]] = row[1];
+    });
+  }
+  
+  // Заполняем недостающие настройки значениями по умолчанию
+  const defaultSettings = {
+    'DEBUG_VK_API': 'TRUE',
+    'bid_step_enabled': 'TRUE',
+    'bid_step': '50',
+    'min_bid_increment': '50',
+    'max_bid': '1000000',
+    'require_subscription': 'FALSE',
+    'delivery_rules': '{"1-3": 450, "4-6": 550, "7+": 650}',
+    'order_summary_template': 'Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.',
+    'outbid_notification_template': '🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}',
+    'low_bid_notification_template': '👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}',
+    'winner_notification_template': '🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите "АУКЦИОН".',
+    'subscription_required_template': '📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}',
+    'ADMIN_IDS': ''
+  };
+  
+  // Заполняем описания настроек
+  const descriptions = {
+    'DEBUG_VK_API': 'Включить подробное логгирование запросов к VK API (TRUE/FALSE)',
+    'bid_step_enabled': 'Включить проверку шага ставки (TRUE/FALSE)',
+    'bid_step': 'Размер шага ставки (например, 50 руб)',
+    'min_bid_increment': 'Минимальная надбавка к текущей цене',
+    'max_bid': 'Максимально допустимая ставка (защита от опечаток)',
+    'require_subscription': 'Требовать подписку на группу для участия в аукционе (TRUE/FALSE)',
+    'delivery_rules': 'Правила доставки (JSON). Формат: "кол-во":цена',
+    'order_summary_template': 'Шаблон сообщения победителю с деталями заказа',
+    'outbid_notification_template': 'Шаблон уведомления о перебитой ставке',
+    'low_bid_notification_template': 'Шаблон уведомления о низкой ставке',
+    'winner_notification_template': 'Шаблон уведомления победителю',
+    'subscription_required_template': 'Шаблон уведомления о необходимости подписки',
+    'ADMIN_IDS': 'VK ID администраторов через запятую (например, 12345,67890)'
+  };
+  
+  // Добавляем недостающие настройки
+  for (const [key, defaultValue] of Object.entries(defaultSettings)) {
+    if (!(key in existingSettings)) {
+      // Найдем свободную строку или добавим новую
+      let found = false;
+      for (let i = 1; i < values.length; i++) {
+        if (values[i][0] === key) {
+          found = true;
+          break;
+        }
+      }
+      
+      if (!found) {
+        settingsSheet.appendRow([key, defaultValue, descriptions[key] || ""]);
+      }
+    }
+  }
+  
+  // Очищаем кэш настроек
+  CacheService.getScriptCache().remove("settings");
 }
 function showInstructions() { SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutputFromFile('Instructions').setTitle('Инструкция')); }
 function showAuthSettings() { SpreadsheetApp.getUi().showModelessDialog(HtmlService.createHtmlOutputFromFile('Login').setWidth(350).setHeight(300), 'Вход'); }
