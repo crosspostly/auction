@@ -553,40 +553,25 @@ function finalizeAuction() {
       if (!lot.leader_id) { 
 
         updateLot(lot.lot_id, { status: "unsold" }); 
-
         postCommentToLot(postId, "❌ Лот не продан"); 
-
         Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
-
       }
-
       else {
-
         const winnerData = { lot_id: lot.lot_id, name: lot.name, price: lot.current_price, winner_id: lot.leader_id, winner_name: getUserName(lot.leader_id), won_at: new Date(), status: "pending_contact" };
-
         allWinnersData.push(winnerData); // Добавляем данные победителя в массив
-
         const notification = { user_id: lot.leader_id, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
+        queueNotification(notification);
+        const today = new Date();
+        const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+        postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+        updateLot(lot.lot_id, { status: "sold" });
+        Monitoring.recordEvent('WINNER_DECLARED', winnerData);
+      }
+    });
 
-      queueNotification(notification);
-
-      const today = new Date();
-      const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-      postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
-
-      updateLot(lot.lot_id, { status: "sold" });
-
-            Monitoring.recordEvent('WINNER_DECLARED', winnerData);
-
-          }
-
-        });
-
-        // Отправляем отчет администраторам после обработки всех лотов
-
-        if (allWinnersData.length > 0) {
-
-          sendAdminReport(allWinnersData);
+    // Отправляем отчет администраторам после обработки всех лотов
+    if (allWinnersData.length > 0) {
+      sendAdminReport(allWinnersData);
 
         }
 
