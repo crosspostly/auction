@@ -69,11 +69,15 @@ function runSingleSimulation() {
 
 Оплата на карту в течение 3 дней после победы.`;
   
+  // Use the main VK token to post
+  const vkToken = getSetting('VK_TOKEN');
+  const groupId = getSetting('GROUP_ID');
+  
   const postResponse = callVk('wall.post', {
-    owner_id: `-${getVkGroupId()}`,
+    owner_id: `-${groupId}`,
     from_group: 1,
     message: postText
-  });
+  }, vkToken);
 
   if (!postResponse || !postResponse.response || !postResponse.response.post_id) {
     L('Simulation failed: could not create lot post.', { error: postResponse });
@@ -187,20 +191,3 @@ function resetSimulationCounter() {
   Monitoring.recordEvent('SIMULATOR_COUNTER_RESET', {});
 }
 
-// Override callVk to accept a token
-function callVk(method, params, token = null) {
-  const authToken = token || getSetting('VK_TOKEN');
-  // ... (rest of the standard callVk function)
-  const cleanParams = { access_token: authToken, v: "5.199", ...params };
-  const url = 'https://api.vk.com/method/' + method;
-  // ... rest of the function ...
-  const options = {
-    method: 'post',
-    contentType: 'application/x-www-form-urlencoded',
-    payload: Object.keys(cleanParams).map(k => `${encodeURIComponent(k)}=${encodeURIComponent(cleanParams[k])}`).join('&'),
-    muteHttpExceptions: true
-  };
-  const response = UrlFetchApp.fetch(url, options);
-  const body = response.getContentText();
-  return JSON.parse(body);
-}
