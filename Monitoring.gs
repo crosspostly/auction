@@ -1,35 +1,24 @@
 /**
- * @fileoverview This is an independent monitoring script.
- * Its only purpose is to record key events into the "Статистика" sheet.
- * It is called from the main logic but does not affect it.
+ * @fileoverview Monitoring script for recording events and statistics.
  */
 
-const Monitoring = (function() {
-  
-  /**
-   * Records a specific event to the 'Статистика' sheet.
-   * @param {string} eventType - The name of the event (e.g., 'LOT_CREATED', 'BID_RECEIVED').
-   * @param {object} data - A JSON object with details about the event.
-   */
-  function recordEvent(eventType, data) {
-    try {
-      // Ensure data is a string for the sheet
-      const details = (typeof data === 'string') ? data : JSON.stringify(data, null, 2);
-      
-      appendRow("Statistics", {
-        Timestamp: new Date(),
-        EventType: eventType,
-        Details: details
-      });
-      
-    } catch (e) {
-      // If monitoring fails, log it to the main log but don't stop the main process.
-      logError('Monitoring_Failed', e, { eventType: eventType, data: data });
-    }
-  }
+const MONITORING_SETTINGS = {
+  sheetName: 'Статистика',
+  header: ['Timestamp', 'EventType', 'Data']
+};
 
-  return {
-    recordEvent: recordEvent
-  };
-  
-})();
+/**
+ * Records an event to the monitoring sheet.
+ * @param {string} eventType - The type of event (e.g., 'SIMULATOR_START', 'BID_PLACED').
+ * @param {object} data - A JSON object with event details.
+ */
+function recordEvent(eventType, data) {
+  try {
+    const sheet = getSheet(MONITORING_SETTINGS.sheetName, MONITORING_SETTINGS.header);
+    const timestamp = new Date();
+    const dataString = JSON.stringify(data);
+    sheet.appendRow([timestamp, eventType, dataString]);
+  } catch (e) {
+    Logger.log(`Failed to record event: ${e.message}`);
+  }
+}

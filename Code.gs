@@ -80,6 +80,11 @@ function onOpen() {
       .addItem('▶️ Запустить один цикл симуляции (ТЕСТ)', 'runSingleSimulation')
       .addItem('⏰ Включить ежечасный запуск', 'setupHourlySimulation')      .addItem('🛑 Остановить ежечасный запуск', 'stopSimulation')
       .addItem('🗑️ Сбросить счетчик постов', 'resetSimulationCounter'))
+    .addSubMenu(ui.createMenu('🤖 СИМУЛЯТОР')
+      .addItem('▶️ Запустить один цикл симуляции (ТЕСТ)', 'runSingleSimulation')
+      .addItem('⏰ Включить ежечасный запуск', 'setupHourlySimulation')
+      .addItem('🛑 Остановить ежечасный запуск', 'stopSimulation')
+      .addItem('🗑️ Сбросить счетчик постов', 'resetSimulationCounter'))
     .addToUi();
 }
 function showAllSheets() { toggleSystemSheets(false); }
