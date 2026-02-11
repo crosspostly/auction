@@ -14,65 +14,46 @@
 function runAllIntegrationTests() {
   const ui = SpreadsheetApp.getUi();
   const allResults = [];
-  let summary = "РЕЗУЛЬТАТЫ ВСЕХ ИНТЕГРАЦИОННЫХ ТЕСТОВ:
-
-";
+  let summary = "РЕЗУЛЬТАТЫ ВСЕХ ИНТЕГРАЦИОННЫХ ТЕСТОВ:\n\n";
 
   // --- Run Component Tests ---
-  summary += "--- Запуск компонентных тестов ---
-";
+  summary += "--- Запуск компонентных тестов ---\n";
   const componentResults = runComponentTests();
   allResults.push(...componentResults);
   componentResults.forEach(result => {
-    summary += `${result.testName}: ${result.passed ? '✅' : '❌'}
-`;
+    summary += result.testName + ": " + (result.passed ? '✅' : '❌') + "\n";
   });
 
   // --- Run End-to-End Workflow Tests ---
-  summary += "
---- Запуск сквозного теста жизненного цикла ---
-";
+  summary += "\n--- Запуск сквозного теста жизненного цикла ---\n";
   const workflowResults = testCompleteAuctionWorkflow();
   allResults.push(...workflowResults);
    workflowResults.forEach(result => {
-    summary += `${result.testName}: ${result.passed ? '✅' : '❌'}
-`;
+    summary += result.testName + ": " + (result.passed ? '✅' : '❌') + "\n";
   });
   
   // --- Run Standalone Tests ---
-  summary += "
---- Запуск теста очереди событий ---
-";
+  summary += "\n--- Запуск теста очереди событий ---\n";
   const eventQueueResult = testEventQueueProcessing();
   allResults.push(eventQueueResult);
-  summary += `${eventQueueResult.testName}: ${eventQueueResult.passed ? '✅' : '❌'}
-`;
+  summary += eventQueueResult.testName + ": " + (eventQueueResult.passed ? '✅' : '❌') + "\n";
 
 
   // --- Generate Final Summary ---
   const passedCount = allResults.filter(r => r && r.passed).length;
   const failedCount = allResults.filter(r => r && !r.passed).length;
 
-  let finalSummary = `РЕЗУЛЬТАТЫ ВСЕХ ИНТЕГРАЦИОННЫХ ТЕСТОВ:
+  let finalSummary = "РЕЗУЛЬТАТЫ ВСЕХ ИНТЕГРАЦИОННЫХ ТЕСТОВ:\n\n";
+  finalSummary += "Всего тестов запущено: " + allResults.length + "\n";
+  finalSummary += "✅ Пройдено: " + passedCount + "\n";
+  finalSummary += "❌ Провалено: " + failedCount + "\n\n";
 
-`;
-  finalSummary += `Всего тестов запущено: ${allResults.length}
-`;
-  finalSummary += `✅ Пройдено: ${passedCount}
-`;
-  finalSummary += `❌ Провалено: ${failedCount}
-
-`;
-
-  finalSummary += "--- ДЕТАЛИ ---
-";
+  finalSummary += "--- ДЕТАЛИ ---\n";
   allResults.forEach(result => {
     if (result) {
-      finalSummary += `${result.testName}: ${result.passed ? '✅ ПРОШЕЛ' : '❌ НЕ ПРОШЕЛ'}
-`;
+      finalSummary += result.testName + ": " + (result.passed ? '✅ ПРОШЕЛ' : '❌ НЕ ПРОШЕЛ') + "\n";
       if (!result.passed) {
-        finalSummary += `  -> Ошибка: ${result.error}
-`;
+        finalSummary += "  -> Ошибка: " + result.error + "\n";
       }
     }
   });
