@@ -1,7 +1,8 @@
 const SHEETS = {
-  Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline", "bid_step"] },
+  Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline", "bid_step", "image_url", "attachment_id"] },
   Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id", "status"] },
-  Winners: { name: "Победители", headers: ["lot_id", "name", "price", "winner_id", "winner_name", "won_at", "status", "delivery", "paid", "shipped"] },
+  Users: { name: "Пользователи", headers: ["user_id", "user_name", "first_win_date", "last_win_date", "total_lots_won", "total_lots_paid", "shipping_status", "shipping_details"] },
+  Orders: { name: "Заказы", headers: ["order_id", "lot_id", "lot_name", "post_id", "user_id", "win_date", "win_price", "status", "shipping_batch_id"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   Statistics: { name: "Статистика", headers: ["Timestamp", "EventType", "Details"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
@@ -10,11 +11,32 @@ const SHEETS = {
 };
 
 const DEFAULT_SETTINGS = {
+  CODE_WORD: 'Аукцион',
   bid_step: 50,
   min_bid_increment: 50,
   max_bid: 1000000,
   delivery_rules: JSON.stringify({ "1-3": 450, "4-6": 550, "7+": 650 }),
-  order_summary_template: "Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой.\",
+  order_summary_template: "Добрый день!
+
+Ваши выигранные лоты:
+{LOTS_LIST}
+
+Сумма за лоты: {LOTS_TOTAL}₽
+Доставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽
+━━━━━━━━━━━━━━━━━━━
+ИТОГО К ОПЛАТЕ: {TOTAL_COST}₽
+
+Для оформления отправки пришлите:
+1. ФИО полностью
+2. Город и адрес (или СДЭК/Почта России)
+3. Номер телефона
+4. Скриншот оплаты
+
+💳 Реквизиты для оплаты:
+{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}
+
+📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
+Напишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой.",
   outbid_notification_template: "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}",
   low_bid_notification_template: "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}",
   winner_notification_template: "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".",
@@ -31,6 +53,7 @@ const TOGGLE_SETTINGS = {
 
 const SETTINGS_DESCRIPTIONS = {
   ADMIN_IDS: "VK ID администраторов через запятую (например, 12345,67890)",
+  CODE_WORD: "Кодовое слово, которое пользователь пишет в ЛС для получения сводки по заказам",
   bid_step: "Размер шага ставки (например, 50 руб)",
   min_bid_increment: "Минимальная надбавка к текущей цене",
   max_bid: "Максимально допустимая ставка (защита от опечаток)",
@@ -228,7 +251,7 @@ function createDemoData() {
 
   // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
   settingsSheet.appendRow(["--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", ""]);
-  const mainSettingsKeys = ["bid_step", "min_bid_increment", "max_bid", "delivery_rules"];
+  const mainSettingsKeys = ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"];
   mainSettingsKeys.forEach(key => {
     settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
   });

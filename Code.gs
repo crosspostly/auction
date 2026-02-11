@@ -63,9 +63,7 @@ function onOpen() {
       .addItem('📨 Отправить очередь', 'processNotificationQueue')
       .addItem('🔄 Сбросить триггеры', 'setupTriggers'))
     .addSubMenu(ui.createMenu('🔬 ТЕСТЫ')
-      .addItem('🧪 Запустить все тесты', 'runAllTests')
-      .addItem('📋 Запустить интеграционные тесты', 'runIntegrationTests')
-      .addItem('🔄 Тест полного цикла', 'testCompleteAuctionWorkflow')
+      .addItem('🧪 Запустить все интеграционные тесты', 'runAllIntegrationTests')
       .addItem('🔑 Проверить права токенов (Full)', 'testFullPermissions'))
     .addSubMenu(ui.createMenu('🔧 СЕРВИС')
       .addItem('⚙️ Проверить и исправить настройки', 'checkAndFixSettings')
@@ -76,15 +74,6 @@ function onOpen() {
       .addItem('🔧 Авто-ремонт системы', 'autoRepairSystem')
       .addItem('📈 Непрерывный мониторинг', 'continuousMonitoring'))
     .addSeparator()
-    .addSubMenu(ui.createMenu('🤖 СИМУЛЯТОР')
-      .addItem('▶️ Запустить один цикл симуляции (ТЕСТ)', 'runSingleSimulation')
-      .addItem('⏰ Включить ежечасный запуск', 'setupHourlySimulation')      .addItem('🛑 Остановить ежечасный запуск', 'stopSimulation')
-      .addItem('🗑️ Сбросить счетчик постов', 'resetSimulationCounter'))
-    .addSubMenu(ui.createMenu('🤖 СИМУЛЯТОР')
-      .addItem('▶️ Запустить один цикл симуляции (ТЕСТ)', 'runSingleSimulation')
-      .addItem('⏰ Включить ежечасный запуск', 'setupHourlySimulation')
-      .addItem('🛑 Остановить ежечасный запуск', 'stopSimulation')
-      .addItem('🗑️ Сбросить счетчик постов', 'resetSimulationCounter'))
     .addToUi();
 }
 function showAllSheets() { toggleSystemSheets(false); }
@@ -242,79 +231,164 @@ function routeEvent(payload) {
     case "message_new": handleMessageNew(payload); break;
   }
 }
+
+function handleMessageNew(payload) {
+    const settings = getSettings();
+    const codeWord = (settings.CODE_WORD || 'Аукцион').toLowerCase();
+    const message = payload.object.message;
+    const text = (message.text || '').toLowerCase();
+    const userId = String(message.from_id);
+
+    if (text !== codeWord) {
+        logDebug("handleMessageNew: Ignored message, no code word.", {text: message.text});
+        return;
+    }
+
+    logInfo("handleMessageNew: Code word received.", {userId: userId, text: message.text});
+
+    // 1. Find user and their unpaid orders
+    const allOrders = getSheetData("Orders");
+    const userOrders = allOrders.filter(o => String(o.data.user_id) === userId && o.data.status === 'unpaid');
+
+    if (userOrders.length === 0) {
+        sendMessage(userId, "У вас нет неоплаченных выигранных лотов.");
+        return;
+    }
+
+    // 2. Prepare data for the template
+    let lotsList = '';
+    let lotsTotal = 0;
+    userOrders.forEach(order => {
+        lotsList += `- Лот "${order.data.lot_name}" - ${order.data.win_price}₽\n`;
+        lotsTotal += Number(order.data.win_price);
+    });
+
+    const itemCount = userOrders.length;
+    const deliveryRules = settings.delivery_rules || {};
+    let deliveryCost = 0;
+
+    // Simplified delivery cost logic
+    if (itemCount > 0) {
+        if (itemCount <= 3 && deliveryRules['1-3']) deliveryCost = deliveryRules['1-3'];
+        else if (itemCount <= 6 && deliveryRules['4-6']) deliveryCost = deliveryRules['4-6'];
+        else if (deliveryRules['7+']) deliveryCost = deliveryRules['7+'];
+        else deliveryCost = 0; // Default or error case
+    }
+    
+    const totalCost = lotsTotal + deliveryCost;
+
+    // 3. Fill the template
+    let template = settings.order_summary_template || "Ошибка: шаблон не найден.";
+    const messageText = template
+        .replace('{LOTS_LIST}', lotsList)
+        .replace('{LOTS_TOTAL}', lotsTotal)
+        .replace('{ITEM_COUNT}', itemCount)
+        .replace('{DELIVERY_COST}', deliveryCost)
+        .replace('{TOTAL_COST}', totalCost)
+        .replace('{PAYMENT_BANK}', settings.PAYMENT_BANK || '')
+        .replace('{PAYMENT_PHONE}', settings.PAYMENT_PHONE || '');
+
+    // 4. Send the message
+    sendMessage(userId, messageText);
+    Monitoring.recordEvent('USER_SUMMARY_SENT', { userId: userId, total_cost: totalCost });
+}
+
 function handleWallPostNew(payload) {
-  const text = payload.object && payload.object.text ? String(payload.object.text) : "";
-  if (!/#аукцион/i.test(text)) return;
-  const lot = parseLotFromPost(text);
+  if (!payload.object) return;
+  const lot = parseLotFromPost(payload.object);
   if (!lot) {
-    Monitoring.recordEvent('LOT_PARSE_FAILED', { text: text.substring(0, 100) });
-    logInfo("Пост не распаршен", text.substring(0, 50));
+    Monitoring.recordEvent('LOT_PARSE_FAILED', { text: (payload.object.text || "").substring(0, 100) });
+    logInfo("Пост не распаршен", (payload.object.text || "").substring(0, 50));
     return;
   }
-  const newLotData = { lot_id: String(lot.lot_id), post_id: `${payload.object.owner_id}_${payload.object.id}`, name: lot.name, start_price: lot.start_price, current_price: lot.start_price, leader_id: "", status: "active", created_at: new Date(), deadline: lot.deadline || new Date(new Date().getTime() + 7*24*60*60*1000), bid_step: lot.bidStep || 0 };
+  const newLotData = { 
+    lot_id: String(lot.lot_id), 
+    post_id: `${payload.object.owner_id}_${payload.object.id}`, 
+    name: lot.name, 
+    start_price: lot.start_price, 
+    current_price: lot.start_price, 
+    leader_id: "", 
+    status: "active", 
+    created_at: new Date(), 
+    deadline: lot.deadline || new Date(new Date().getTime() + 7*24*60*60*1000), 
+    bid_step: lot.bidStep || 0,
+    image_url: lot.image_url || "",
+    attachment_id: lot.attachment_id || ""
+  };
   upsertLot(newLotData);
   Monitoring.recordEvent('LOT_CREATED', newLotData);
   logInfo(`Лот №${lot.lot_id} добавлен`);
 }
-function parseLotFromPost(text) {
+function parseLotFromPost(postObject) {
   try {
-
-    // 1. Check for the main keyword
+    const text = postObject.text || "";
     if (!/#аукцион/i.test(text)) return null;
 
-    // 2. Find Lot Number (more flexible)
-            const lotNumberMatch = text.match(/(?:[#аукцион\w@]+\s*)?(?:№|No\.|Number)\s*([a-zA-Z0-9_]+)/i);
-            if (!lotNumberMatch) return null;
-            const lotId = lotNumberMatch[1];
-            let name = "Лот №" + lotId; // Default name
-            let startPrice = 0;
-            let bidStep = 0; // New variable for bid step
-            let deadline = null;
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-            for (const line of lines) {
+    const lotNumberMatch = text.match(/(?:[#аукцион\w@]+\s*)?(?:№|No\.|Number)\s*([a-zA-Z0-9_]+)/i);
+    if (!lotNumberMatch) return null;
+    const lotId = lotNumberMatch[1];
+    let name = "Лот №" + lotId;
+    let startPrice = 0;
+    let bidStep = 0;
+    let deadline = null;
 
-              // 3. Find Lot Name
-              const nameMatch = line.match(/^(?:Лот|🎁Лот)\s*[-—]?\s*(.+)/i);
-              if (nameMatch) {
-                name = nameMatch[1].trim();
-                                continue;
-                              }
-
-                              // 5. Find Deadline
-                              const deadlineMatch = line.match(/(?:Дедлайн|Дата окончания аукциона)\s*(\d{1,2}\.\d{1,2}\.\d{4})\s*в\s*(\d{1,2}:\d{2})\s*по МСК/i);
-                              if (deadlineMatch) {
-                                const [day, month, year] = deadlineMatch[1].split('.').map(Number);
-                                const [hours, minutes] = deadlineMatch[2].split(':').map(Number);
-
-                                // Note: Months are 0-indexed in JavaScript Date objects, so we subtract 1 from the month.
-                                deadline = new Date(year, month - 1, day, hours, minutes);
-                                continue;
-                              }
-
-              // 4. Find Start Price and Step (more flexible)
-              const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
-              if (priceMatch) {
-                startPrice = Number(priceMatch[1]);
-                if (priceMatch[2]) {
-                  bidStep = Number(priceMatch[2]);
-                }
-                continue;
-              }
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    for (const line of lines) {
+      const nameMatch = line.match(/^(?:Лот|🎁Лот)\s*[-—]?\s*(.+)/i);
+      if (nameMatch) {
+        name = nameMatch[1].trim();
         continue;
       }
+      const deadlineMatch = line.match(/(?:Дедлайн|Дата окончания аукциона)\s*(\d{1,2}\.\d{1,2}\.\d{4})\s*в\s*(\d{1,2}:\d{2})\s*по МСК/i);
+      if (deadlineMatch) {
+        const [day, month, year] = deadlineMatch[1].split('.').map(Number);
+        const [hours, minutes] = deadlineMatch[2].split(':').map(Number);
+        deadline = new Date(year, month - 1, day, hours, minutes);
+        continue;
+      }
+      const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
+      if (priceMatch) {
+        startPrice = Number(priceMatch[1]);
+        if (priceMatch[2]) bidStep = Number(priceMatch[2]);
+        continue;
+      }
+    }
+    
+    let imageUrl = "";
+    let attachmentId = "";
+    if (postObject.attachments && postObject.attachments.length > 0) {
+      const photoAttachment = postObject.attachments.find(a => a.type === 'photo');
+      if (photoAttachment) {
+        const photo = photoAttachment.photo;
+        attachmentId = `photo${photo.owner_id}_${photo.id}`;
+        // Find best photo size URL
+        const sizeOrder = ['w', 'z', 'y', 'x', 'm', 's'];
+        for (const sizeType of sizeOrder) {
+          const size = photo.sizes.find(s => s.type === sizeType);
+          if (size) {
+            imageUrl = size.url;
+            break;
+          }
+        }
+        if (!imageUrl && photo.sizes.length > 0) {
+            imageUrl = photo.sizes[photo.sizes.length - 1].url; // Fallback to largest available
+        }
+      }
+    }
 
-    // 5. Find Deadline (already robust)
-    deadline = parseDeadline(text);
     const parsedLot = {
       lot_id: lotId,
-      name: name.substring(0, 150), // Increased length
+      name: name.substring(0, 150),
       start_price: startPrice,
-      deadline: deadline
+      bidStep: bidStep,
+      deadline: deadline,
+      image_url: imageUrl,
+      attachment_id: attachmentId
     };
     Monitoring.recordEvent('LOT_PARSE_SUCCESS', { raw_text_preview: text.substring(0,100), parsed: parsedLot });
     return parsedLot;
   } catch (e) {
-    Monitoring.recordEvent('LOT_PARSE_CRITICAL_ERROR', { error: e.message, text: text.substring(0,200) });
+    Monitoring.recordEvent('LOT_PARSE_CRITICAL_ERROR', { error: e.message, text: (postObject.text || "").substring(0,200) });
     return null;
   }
 }
@@ -672,120 +746,163 @@ function checkUserSubscription(userId) {
 }
 
 function finalizeAuction() {
-  const activeLots = getSheetData("Config").filter(row => row.data.status === "active");
-    Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
-    const allWinnersData = []; // Объявляем массив для сбора данных о победителях
-    activeLots.forEach(row => {
-      const lot = row.data;
-      const postId = parsePostKey(lot.post_id).postId;
-      if (!lot.leader_id) {
-        updateLot(lot.lot_id, { status: "unsold" });
-        postCommentToLot(postId, "❌ Лот не продан");
-        Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
+  const activeLots = getSheetData("Config").filter(row => row.data.status === "active" && new Date(row.data.deadline) < new Date());
+  Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
+
+  const allWinnersDataForReport = [];
+  const allUsers = getSheetData("Users");
+
+  activeLots.forEach(row => {
+    const lot = row.data;
+    const postId = parsePostKey(lot.post_id).postId;
+    
+    if (!lot.leader_id) {
+      updateLot(lot.lot_id, { status: "unsold" });
+      postCommentToLot(postId, "❌ Лот не продан");
+      Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
+    } else {
+      const winnerId = String(lot.leader_id);
+      const winnerName = getUserName(winnerId);
+
+      const newOrder = {
+        order_id: `${lot.lot_id}-${winnerId}`,
+        lot_id: lot.lot_id,
+        lot_name: lot.name,
+        post_id: lot.post_id,
+        user_id: winnerId,
+        win_date: new Date(),
+        win_price: lot.current_price,
+        status: 'unpaid',
+        shipping_batch_id: ''
+      };
+      appendRow("Orders", newOrder);
+
+      const existingUser = allUsers.find(u => String(u.data.user_id) === winnerId);
+      if (existingUser) {
+        updateRow("Users", existingUser.rowIndex, {
+          last_win_date: new Date(),
+          total_lots_won: (Number(existingUser.data.total_lots_won) || 0) + 1
+        });
+      } else {
+        const newUser = {
+          user_id: winnerId,
+          user_name: winnerName,
+          first_win_date: new Date(),
+          last_win_date: new Date(),
+          total_lots_won: 1,
+          total_lots_paid: 0,
+          shipping_status: 'accumulating',
+          shipping_details: ''
+        };
+        appendRow("Users", newUser);
+        allUsers.push({ data: newUser, rowIndex: -1 });
       }
-      else {
-        const winnerData = { lot_id: lot.lot_id, name: lot.name, price: lot.current_price, winner_id: lot.leader_id, winner_name: getUserName(lot.leader_id), won_at: new Date(), status: "pending_contact" };
-        allWinnersData.push(winnerData); // Добавляем данные победителя в массив
-        const notification = { user_id: lot.leader_id, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
-        queueNotification(notification);
-        // Находим комментарий победителя с его последней ставкой
-        const bidsForWinner = getSheetData("Bids").filter(b => b.data.lot_id === lot.lot_id && b.data.user_id === lot.leader_id);
-        if (bidsForWinner.length > 0) {
-          // Находим последнюю ставку победителя
-          const latestBid = bidsForWinner.reduce((latest, current) => 
-            new Date(current.data.timestamp) > new Date(latest.data.timestamp) ? current : latest
-          );
-          
-          if (latestBid && latestBid.data.comment_id) {
-            // Отвечаем на комментарий победителя
-            const today = new Date();
-            const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-            const winnerComment = `Поздравляем с победой в аукционе за миниатюру! Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`;
-            replyToComment(postId, latestBid.data.comment_id, winnerComment);
-          } else {
-            // Если не знаем ID комментария победителя, публикуем под постом
-            const today = new Date();
-            const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-            postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
-          }
+      
+      updateLot(lot.lot_id, { status: "sold" });
+
+      const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
+      queueNotification(notification);
+
+      const bidsForWinner = getSheetData("Bids").filter(b => b.data.lot_id === lot.lot_id && b.data.user_id === lot.leader_id);
+      if (bidsForWinner.length > 0) {
+        const latestBid = bidsForWinner.reduce((latest, current) => 
+          new Date(current.data.timestamp) > new Date(latest.data.timestamp) ? current : latest
+        );
+        if (latestBid && latestBid.data.comment_id) {
+          const today = new Date();
+          const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+          const winnerComment = `Поздравляем с победой в аукционе за миниатюру! Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`;
+          replyToComment(postId, latestBid.data.comment_id, winnerComment);
         } else {
-          // Если нет информации о ставках победителя, публикуем под постом
           const today = new Date();
           const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
           postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
         }
-        updateLot(lot.lot_id, { status: "sold" });
-        Monitoring.recordEvent('WINNER_DECLARED', winnerData);
+      } else {
+        const today = new Date();
+        const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
+        postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
       }
+
+      allWinnersDataForReport.push({ 
+          lot_id: lot.lot_id, 
+          name: lot.name, 
+          price: lot.current_price, 
+          winner_id: winnerId, 
+          winner_name: winnerName,
+          attachment_id: lot.attachment_id 
+      });
+
+      Monitoring.recordEvent('WINNER_DECLARED', newOrder);
+    }
+  });
+
+  if (allWinnersDataForReport.length > 0) {
+    sendAdminReport(allWinnersDataForReport);
+  }
+}
+
+/**
+ * Отправляет отчет о победителях администраторам группы.
+ * @param {Array<Object>} winners Массив объектов победителей.
+ */
+function sendAdminReport(winners) {
+  const settings = getSettings();
+  const adminIdsString = settings.ADMIN_IDS;
+  if (!adminIdsString || adminIdsString.trim() === "") {
+    logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны в настройках.");
+    return;
+  }
+  const adminIds = adminIdsString.split(',').map(id => id.trim()).filter(id => id);
+  if (adminIds.length === 0) {
+    logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
+    return;
+  }
+
+  const winnersGroupedByUser = winners.reduce((acc, winner) => {
+    if (!acc[winner.winner_id]) {
+      acc[winner.winner_id] = {
+        name: winner.winner_name,
+        lots: []
+      };
+    }
+    acc[winner.winner_id].lots.push({
+      lot_id: winner.lot_id,
+      name: winner.name,
+      price: winner.price,
+      attachment_id: winner.attachment_id
     });
+    return acc;
+  }, {});
 
-    // Отправляем отчет администраторам после обработки всех лотов
-    if (allWinnersData.length > 0) {
-      sendAdminReport(allWinnersData);
-        }
-      }
+  let summaryMessage = `🏁 *Отчет о завершении аукциона от ${new Date().toLocaleString()}* 🏁\n\n`;
+  if (Object.keys(winnersGroupedByUser).length === 0) {
+    summaryMessage += "К сожалению, в этом аукционе победителей нет.\n";
+  } else {
+    for (const userId in winnersGroupedByUser) {
+      const winner = winnersGroupedByUser[userId];
+      summaryMessage += `👤 *${winner.name}* ([id${userId}|${winner.name}])\n`;
+      winner.lots.forEach(lot => {
+        summaryMessage += `  - Лот №${lot.lot_id}: «${lot.name}» - *${lot.price}₽*\n`;
+      });
+      summaryMessage += "\n";
+    }
+  }
+  summaryMessage += "----------------------------------------\n";
+  summaryMessage += `Общее количество проданных лотов: ${winners.length}\n`;
+  summaryMessage += `Общая сумма продаж: ${winners.reduce((sum, w) => sum + w.price, 0)}₽\n`;
 
-      /**
-
-       * Отправляет отчет о победителях администраторам группы.
-
-       * @param {Array<Object>} winners Массив объектов победителей.
-       */
-      function sendAdminReport(winners) {
-        const settings = getSettings();
-        const adminIdsString = settings.ADMIN_IDS;
-        if (!adminIdsString || adminIdsString.trim() === "") {
-          logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны в настройках.");
-          return;
-        }
-        const adminIds = adminIdsString.split(',').map(id => id.trim()).filter(id => id);
-        if (adminIds.length === 0) {
-          logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
-          return;
-        }
-
-        // Группируем победителей по пользователю
-        const winnersGroupedByUser = winners.reduce((acc, winner) => {
-          if (!acc[winner.winner_id]) {
-            acc[winner.winner_id] = {
-              name: winner.winner_name,
-              lots: []
-            };
-          }
-          acc[winner.winner_id].lots.push({
-            lot_id: winner.lot_id,
-            name: winner.name,
-            price: winner.price
-          });
-          return acc;
-        }, {});
-        let reportMessage = `🏁 *Отчет о завершении аукциона от ${new Date().toLocaleString()}* 🏁\n\n`;
-        if (Object.keys(winnersGroupedByUser).length === 0) {
-          reportMessage += "К сожалению, в этом аукционе победителей нет.\n";
-        } else {
-          for (const userId in winnersGroupedByUser) {
-            const winner = winnersGroupedByUser[userId];
-            reportMessage += `👤 *${winner.name}* ([id${userId}|${winner.name}])\n`;
-            winner.lots.forEach(lot => {
-              reportMessage += `  - Лот №${lot.lot_id}: «${lot.name}» - *${lot.price}₽*\n`;
-            });
-            reportMessage += "\n";
-          }
-        }
-        reportMessage += "----------------------------------------\n";
-        reportMessage += `Общее количество проданных лотов: ${winners.length}\n`;
-        reportMessage += `Общая сумма продаж: ${winners.reduce((sum, w) => sum + w.price, 0)}₽\n`;
-        // Отправляем каждому администратору
-        adminIds.forEach(adminId => {
-          try {
-            sendMessage(adminId, reportMessage); // Предполагается наличие функции sendMessage(userId, message)
-            logInfo(`Отчет администратору ${adminId} отправлен.`);
-          } catch (e) {
-            logError('sendAdminReport_send_failed', e, { adminId: adminId, report: reportMessage });
-          }
-        });
-        Monitoring.recordEvent('ADMIN_REPORT_SENT', { recipient_ids: adminIds, report_summary: reportMessage.substring(0, 200) });
-      }
+  adminIds.forEach(adminId => {
+    try {
+      const firstAttachment = winners.length > 0 ? winners[0].attachment_id : null;
+      sendMessage(adminId, summaryMessage, firstAttachment);
+      logInfo(`Отчет администратору ${adminId} отправлен.`);
+    } catch (e) {
+      logError('sendAdminReport_send_failed', e, { adminId: adminId });
+    }
+  });
+  Monitoring.recordEvent('ADMIN_REPORT_SENT', { recipient_ids: adminIds, report_summary: summaryMessage.substring(0, 200) });
+}
       function setupSheets() { Object.keys(SHEETS).forEach(name => getSheet(name)); }
 /**
  * Deletes all existing triggers and creates new ones for the script.
