@@ -1,6 +1,6 @@
 const SHEETS = {
   Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline", "bid_step"] },
-  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id"] },
+  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id", "status"] },
   Winners: { name: "Победители", headers: ["lot_id", "name", "price", "winner_id", "winner_name", "won_at", "status", "delivery", "paid", "shipped"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   Statistics: { name: "Статистика", headers: ["Timestamp", "EventType", "Details"] },
@@ -10,38 +10,43 @@ const SHEETS = {
 };
 
 const DEFAULT_SETTINGS = {
-  DEBUG_VK_API: true,
-  bid_step_enabled: true,
   bid_step: 50,
   min_bid_increment: 50,
   max_bid: 1000000,
-  require_subscription: false, // Новая настройка: требовать подписку для участия
   delivery_rules: JSON.stringify({ "1-3": 450, "4-6": 550, "7+": 650 }),
-  order_summary_template: "Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой.",
+  order_summary_template: "Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой.\",
   outbid_notification_template: "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}",
   low_bid_notification_template: "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}",
   winner_notification_template: "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".",
-  subscription_required_template: "📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}",
-  ADMIN_IDS: "" // Добавляем ADMIN_IDS
+  subscription_required_template: "👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢",
+  invalid_step_template: "👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨",
+  max_bid_exceeded_template: "Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉",
+  auction_finished_template: "Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!"
+};
+
+const TOGGLE_SETTINGS = {
+  bid_step_enabled: "ВКЛ",
+  require_subscription: "ВЫКЛ"
 };
 
 const SETTINGS_DESCRIPTIONS = {
-  DEBUG_VK_API: "Включить подробное логгирование запросов к VK API (TRUE/FALSE)",
-  bid_step_enabled: "Включить проверку шага ставки (TRUE/FALSE)",
+  ADMIN_IDS: "VK ID администраторов через запятую (например, 12345,67890)",
   bid_step: "Размер шага ставки (например, 50 руб)",
   min_bid_increment: "Минимальная надбавка к текущей цене",
   max_bid: "Максимально допустимая ставка (защита от опечаток)",
-  require_subscription: "Требовать подписку на группу для участия в аукционе (TRUE/FALSE)",
   delivery_rules: "Правила доставки (JSON). Формат: \"кол-во\":цена",
   order_summary_template: "Шаблон сообщения победителю с деталями заказа",
   outbid_notification_template: "Шаблон уведомления о перебитой ставке",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
   winner_notification_template: "Шаблон уведомления победителю",
   subscription_required_template: "Шаблон уведомления о необходимости подписки",
-  payment_phone: "Телефон для оплаты (СБП)",
-  payment_bank: "Название банка для оплаты",
-  ADMIN_IDS: "VK ID администраторов через запятую (например, 12345,67890)"
+  invalid_step_template: "Шаблон уведомления о некорректном шаге ставки",
+  max_bid_exceeded_template: "Шаблон уведомления о превышении максимальной ставки",
+  auction_finished_template: "Шаблон уведомления о завершении аукциона",
+  bid_step_enabled: "Включить проверку шага ставки (ВКЛ/ВЫКЛ)",
+  require_subscription: "Требовать подписку на группу для участия в аукционе (ВКЛ/ВЫКЛ)"
 };
+
 
 var _ss_cache = null;
 function getSpreadsheet() { 
@@ -61,9 +66,26 @@ function getSheet(sheetKey) {
 }
 
 function ensureHeaders(sheet, headers) {
-  if (sheet.getLastRow() === 0) {
+  const lastRow = sheet.getLastRow();
+  
+  if (lastRow === 0) {
+    // Лист пуст — просто пишем заголовки
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
     sheet.setFrozenRows(1);
+    return;
+  }
+
+  // Лист не пуст. Проверяем первую строку.
+  const firstRowValues = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  const isMatch = headers.every((h, i) => String(firstRowValues[i]) === String(h));
+
+  if (!isMatch) {
+    // Заголовки не совпадают! Значит, это данные, а заголовков нет.
+    // Вставляем строку сверху и пишем заголовки.
+    sheet.insertRowBefore(1);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
+    sheet.setFrozenRows(1);
+    Logger.log(`Headers restored for sheet: ${sheet.getName()}`);
   }
 }
 
@@ -87,10 +109,18 @@ function appendRow(sheetKey, rowData) {
 
 function updateRow(sheetKey, rowIndex, rowData) {
   const sheet = getSheet(sheetKey);
-  const headers = SHEETS[sheetKey].headers;
-  const existingRow = sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
-  const updatedRow = headers.map((h, i) => rowData[h] !== undefined ? rowData[h] : existingRow[i]);
-  sheet.getRange(rowIndex, 1, 1, headers.length).setValues([updatedRow]);
+  const values = sheet.getDataRange().getValues();
+  if (values.length === 0) return;
+  
+  const headers = values[0];
+  const range = sheet.getRange(rowIndex, 1, 1, headers.length);
+  const currentRowValues = range.getValues()[0];
+  
+  const updatedRow = headers.map((h, i) => {
+    return rowData[h] !== undefined ? rowData[h] : currentRowValues[i];
+  });
+  
+  range.setValues([updatedRow]);
 }
 
 function log(type, message, details) {
@@ -105,6 +135,12 @@ function log(type, message, details) {
 }
 
 function logInfo(msg, det) { log("ИНФО", msg, det); }
+function logDebug(msg, det) {
+  const debug = getSetting('DEBUG_VK_API');
+  if (debug === true || debug === 'TRUE') {
+    log("ОТЛАДКА", msg, det);
+  }
+}
 function logError(src, err, pay) { log("ОШИБКА", `[${src}] ${err.message || String(err)}`, pay); }
 function logIncoming(data) { log("ВХОДЯЩИЙ", "Webhook от VK", data); }
 
@@ -179,10 +215,88 @@ function createDemoData() {
   }
   const settingsSheet = getSheet('Settings');
   const data = settingsSheet.getDataRange().getValues();
-  const keysPresent = data.map(r => r[0]);
-  Object.keys(DEFAULT_SETTINGS).forEach(key => {
-    if (!keysPresent.includes(key)) settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key] || ""]);
+  const keysPresent = new Set(data.map(r => r[0])); // Use Set for faster lookups
+
+  // Clear existing settings data (except headers) before writing new structured data
+  if (data.length > 1) {
+    settingsSheet.deleteRows(2, data.length - 1);
+  }
+
+  // --- АДМИНИСТРАТОР ---
+  settingsSheet.appendRow(["--- АДМИНИСТРАТОР ---", "", ""]);
+  if (!keysPresent.has("ADMIN_IDS")) settingsSheet.appendRow(["ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS]);
+
+  // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
+  settingsSheet.appendRow(["--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", ""]);
+  const mainSettingsKeys = ["bid_step", "min_bid_increment", "max_bid", "delivery_rules"];
+  mainSettingsKeys.forEach(key => {
+    settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
   });
+  
+  // --- ПЕРЕКЛЮЧАТЕЛИ ---
+  settingsSheet.appendRow(["--- ПЕРЕКЛЮЧАТЕЛИ ---", "", ""]);
+  const toggleSettingsKeys = Object.keys(TOGGLE_SETTINGS);
+  toggleSettingsKeys.forEach(key => {
+    settingsSheet.appendRow([key, TOGGLE_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
+  });
+
+  // --- ШАБЛОНЫ ---
+  settingsSheet.appendRow(["--- ШАБЛОНЫ ---", "", ""]);
+  const templateSettingsKeys = Object.keys(DEFAULT_SETTINGS).filter(k => k.endsWith('_template'));
+  templateSettingsKeys.forEach(key => {
+    settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
+  });
+  
+  applyDropdownValidation(); // Apply dropdowns after creating settings
+  setupConditionalFormatting(); // Apply conditional formatting
+}
+
+function applyDropdownValidation() {
+  const sheet = getSheet('Settings');
+  const values = sheet.getDataRange().getValues();
+  const dropdownOptions = ['ВКЛ', 'ВЫКЛ'];
+
+  for (let i = 1; i < values.length; i++) { // Skip header row
+    const settingKey = values[i][0];
+    if (TOGGLE_SETTINGS.hasOwnProperty(settingKey)) {
+      const range = sheet.getRange(i + 1, 2); // Column B for setting_value
+
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireValueInList(dropdownOptions)
+        .setAllowInvalid(false)
+        .setHelpText('Выберите ВКЛ или ВЫКЛ.')
+        .build();
+      range.setDataValidation(rule);
+    }
+  }
+}
+
+
+function setupConditionalFormatting() {
+  const sheet = getSheet('Settings');
+  const range = sheet.getRange("B2:B"); // Колонка B со значениями
+
+  const rules = sheet.getConditionalFormatRules();
+  // Удаляем старые правила для этой колонки, чтобы избежать дублей
+  const newRules = rules.filter(rule => rule.getRanges()[0].getA1Notation() !== range.getA1Notation());
+
+  // Правило для "ВКЛ" (зеленый)
+  const ruleOn = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextEqualTo("ВКЛ")
+    .setBackground("#d9ead3") // Светло-зеленый
+    .setRanges([range])
+    .build();
+  newRules.push(ruleOn);
+
+  // Правило для "ВЫКЛ" (красный)
+  const ruleOff = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextEqualTo("ВЫКЛ")
+    .setBackground("#f4cccc") // Светло-красный
+    .setRanges([range])
+    .build();
+  newRules.push(ruleOff);
+
+  sheet.setConditionalFormatRules(newRules);
 }
 
 function queueNotification(n) {

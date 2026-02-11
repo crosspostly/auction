@@ -4,13 +4,6 @@
  */
 
 const SIMULATOR_SETTINGS = {
-  // Массив тестовых пользователей для симуляции различных ставок.
-  // ВНИМАНИЕ: Это заглушки токенов и ID. В реальной работе нужны настоящие.
-  testUsers: [
-    { id: "11111111", token: "vk1.a.dummy_user_token_1" },
-    { id: "22222222", token: "vk1.a.dummy_user_token_2" },
-    { id: "33333333", token: "vk1.a.dummy_user_token_3" }
-  ],
   // Maximum number of posts the hourly trigger will create before stopping.
   maxPosts: 5,
   // Number of comments to post for each lot.
@@ -69,7 +62,7 @@ function runSingleSimulation() {
 
 Оплата на карту в течение 3 дней после победы.`;
   
-  // Use the main VK token to post
+  // Use the main VK token to post (Group Token)
   const vkToken = getSetting('VK_TOKEN');
   const groupId = getSetting('GROUP_ID');
   
@@ -80,7 +73,8 @@ function runSingleSimulation() {
   }, vkToken);
 
   if (!postResponse || !postResponse.response || !postResponse.response.post_id) {
-    L('Simulation failed: could not create lot post.', { error: postResponse });
+    const errorMsg = postResponse && postResponse.error ? postResponse.error.error_msg : "Unknown error";
+    L('Simulation failed: could not create lot post.', { error: errorMsg, fullResponse: postResponse });
     return;
   }
   
@@ -96,10 +90,6 @@ function runSingleSimulation() {
   let currentBid = startPrice;
   
   for (let i = 0; i < commentCount; i++) {
-    const randomUserIndex = Math.floor(Math.random() * SIMULATOR_SETTINGS.testUsers.length);
-    const selectedUser = SIMULATOR_SETTINGS.testUsers[randomUserIndex];
-    const userId = selectedUser.id;
-    const userToken = selectedUser.token;
 
     const scenario = chooseBidScenario(i, currentBid);
     let newBid = 0;
@@ -111,7 +101,7 @@ function runSingleSimulation() {
       case 'HIGH_FREQUENCY':
         // Post another comment almost immediately
         const nextBid = currentBid + 100;
-        postCommentAsUser(postId, String(nextBid), userToken); // Используем токен выбранного пользователя
+        postCommentAsUser(postId, String(nextBid)); 
         Utilities.sleep(1500); // 1.5 second delay
         newBid = currentBid + 150;
         i++; // Count this as an extra comment
@@ -127,11 +117,15 @@ function runSingleSimulation() {
         break;
     }
 
-    postCommentAsUser(postId, String(newBid), userToken); // Используем токен выбранного пользователя
-    L('Comment posted.', { scenario: scenario, bid: newBid, userId: userId });
-    
-    if (scenario === 'VALID_BID' || scenario === 'HIGH_FREQUENCY') {
-      currentBid = newBid;
+    const isSuccess = postCommentAsUser(postId, String(newBid)); 
+    if (isSuccess) {
+      L('Comment posted.', { scenario: scenario, bid: newBid });
+      
+      if (scenario === 'VALID_BID' || scenario === 'HIGH_FREQUENCY') {
+        currentBid = newBid;
+      }
+    } else {
+      L('Failed to post comment.', { scenario: scenario, bid: newBid });
     }
     
     const delay = Math.floor(Math.random() * (SIMULATOR_SETTINGS.commentDelayMs.max - SIMULATOR_SETTINGS.commentDelayMs.min + 1)) + SIMULATOR_SETTINGS.commentDelayMs.min;
@@ -149,13 +143,26 @@ function chooseBidScenario(index, currentBid) {
   return 'SAME_BID'; // Остальные - равные текущей
 }
 
-function postCommentAsUser(postId, text, token) {
-   return callVk('wall.createComment', {
-    owner_id: `-${getVkGroupId()}`,
-    post_id: postId,
-    from_group: 0, // Post as user
-    message: text
-  }, token); // Use the specific user token
+function postCommentAsUser(postId, text) {
+   // Используем USER_TOKEN (токен администратора),
+   // чтобы публиковать комментарии от имени ПОЛЬЗОВАТЕЛЯ (участника).
+   const userToken = PropertiesService.getScriptProperties().getProperty('USER_TOKEN');
+   
+   // from_group: 0 — комментарий от имени пользователя (автора токена)
+   const response = callVk('wall.createComment', {
+     owner_id: `-${getVkGroupId()}`,
+     post_id: postId,
+     from_group: 0, 
+     message: text
+   }, userToken);
+
+   if (response && response.response && response.response.comment_id) {
+     return true;
+   } else {
+     const error = response ? response.error : "No response";
+     Monitoring.recordEvent('SIMULATOR_COMMENT_ERROR', { error: error, text: text });
+     return false;
+   }
 }
 
 /**

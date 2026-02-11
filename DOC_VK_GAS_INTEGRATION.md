@@ -36,14 +36,16 @@ function callVkApi(method, params) {
 2.  Ответ должен быть чистой строкой кода подтверждения.
 3.  **Обязательно** использование `.setMimeType(ContentService.MimeType.TEXT)`.
 
-### Правильный doPost:
-```javascript
-function doPost(e) {
-  const data = JSON.parse(e.postData.contents);
-  if (data.type === 'confirmation') {
-    return ContentService.createTextOutput(code).setMimeType(ContentService.MimeType.TEXT);
-  }
-  // ... логика
-  return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
-}
-```
+## 5. Двухтокенная схема и проверка прав
+
+Для стабильной работы рекомендуется разделять задачи между двумя токенами:
+1.  **Admin (User) Token**: Только для методов `groups.setCallbackSettings`, `groups.getCallbackConfirmationCode` и `wall.delete`.
+2.  **Group Token**: Для операционной работы (`messages.send`, `wall.createComment`).
+
+### Метод «Тихой проверки» (Шаг 4):
+Для гарантии того, что бот действительно может писать от имени группы (настройка `from_group: 1`), реализован следующий алгоритм:
+1.  Публикация поста `wall.post` через Group Token.
+2.  Публикация комментария `wall.createComment` через Group Token.
+3.  **Мгновенное удаление** поста через Admin Token.
+Это позволяет проверить права, не оставляя мусора на стене группы.
+

@@ -20,8 +20,8 @@
         color: #555;
       }
       input[type="text"], input[type="password"] {
-        flex-grow: 1;
-        padding: 6px;
+        width: 100%;
+        padding: 8px;
         border: 1px solid #ddd;
         border-radius: 4px;
         box-sizing: border-box;
@@ -96,63 +96,69 @@
     </style>
   </head>
   <body>
-    <h3>🔐 Секретные настройки</h3>
-    <form id="authForm" onsubmit="handleFormSubmit(this); return false;">
+    <h3>🔐 Мастер подключения бота (4 шага)</h3>
+    <form id="authForm" onsubmit="return false;">
       
-      <div class="section-title">🔑 Доступ к VK (API)</div>
-
+      <div class="section-title">📡 Шаг 1: Группа</div>
       <div class="form-group">
-        <label>Токен доступа (Access Token)</label>
+        <label>ID или Ссылка на группу</label>
         <div class="input-wrapper">
-          <input type="password" id="vk_token" name="vk_token" placeholder="••••••••••••">
+          <input type="text" id="group_id" name="group_id" placeholder="vk.com/club123 или 123456">
         </div>
-        <div class="hint">Вставьте ссылку или токен. Если уже вводили - оставьте пустым.</div>
+        <div class="hint" id="hint_group_id">Текущий ID: (не задан)</div>
       </div>
 
+      <div class="section-title">🔑 Шаг 2: Admin Token (для настроек)</div>
+      <div class="form-group" style="text-align: center;">
+        <a id="user_token_link" href="https://oauth.vk.com/authorize?client_id=2685278&scope=335872&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token&revoke=1" 
+           target="_blank" 
+           style="display: block; background-color: #2196f3; color: white; text-decoration: none; text-align: center; padding: 10px; border-radius: 4px; font-weight: bold; font-size: 13px;">
+           🔗 ПОЛУЧИТЬ ADMIN TOKEN
+        </a>
+      </div>
       <div class="form-group">
-        <label>ID Группы (Group ID)</label>
-        <div class="input-wrapper">
-          <input type="text" id="group_id" name="group_id" placeholder="123456789">
-          <button type="button" class="secondary" onclick="autoGetGroupId()">🔍 Найти ID</button>
-        </div>
+        <input type="password" id="user_token" name="user_token" placeholder="Вставьте ссылку с USER токеном сюда...">
+        <div class="hint" id="hint_user_token">Токен администратора: (не сохранен)</div>
       </div>
 
-      <div class="section-title">🚀 Авто-подключение</div>
-      
-      <div class="form-group">
-        <label>Web App URL</label>
-        <div class="input-wrapper">
-          <input type="text" id="web_app_url" name="web_app_url" placeholder="https://script.google.com/...">
-        </div>
+      <div class="section-title">🏢 Шаг 3: Group Token (для ответов)</div>
+      <div class="form-group" style="text-align: center;">
+        <a id="vk_token_link" href="https://oauth.vk.com/authorize?client_id=2685278&scope=274432&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token" 
+           target="_blank" 
+           style="display: block; background-color: #ff9800; color: white; text-decoration: none; text-align: center; padding: 10px; border-radius: 4px; font-weight: bold; font-size: 13px;">
+           🔗 ПОЛУЧИТЬ GROUP TOKEN
+        </a>
       </div>
-      
-      <button type="button" class="action" onclick="autoConnect()">🔌 Подключить бота к VK</button>
-      
-      <div class="section-title">💳 Оплата (Реквизиты)</div>
+      <div class="form-group">
+        <input type="password" id="vk_token" name="vk_token" placeholder="Вставьте ссылку с GROUP токеном сюда...">
+        <div class="hint" id="hint_vk_token">Токен группы: (не сохранен)</div>
+      </div>
+
+      <div class="form-group" style="margin-top: 20px;">
+        <button type="button" class="action" onclick="autoConnect()">🚀 ШАГ 4: ПОДКЛЮЧИТЬ И ПРОВЕРИТЬ</button>
+        <div class="hint" style="text-align: center;">Настроит Callback и сделает тихую проверку прав.</div>
+      </div>
+
+      <div class="section-title">💳 Реквизиты и безопасность</div>
 
       <div class="form-group">
         <label>Номер телефона (СБП)</label>
-        <div class="input-wrapper">
-           <input type="text" id="payment_phone" name="payment_phone">
-        </div>
+        <input type="text" id="payment_phone" name="payment_phone" placeholder="+79000000000">
+        <div class="hint" id="hint_payment_phone">Текущий: (не задан)</div>
       </div>
 
       <div class="form-group">
         <label>Банк получателя</label>
-        <div class="input-wrapper">
-           <input type="text" id="payment_bank" name="payment_bank">
-        </div>
+        <input type="text" id="payment_bank" name="payment_bank" placeholder="Сбербанк...">
+        <div class="hint" id="hint_payment_bank">Текущий: (не задан)</div>
       </div>
-      
-      <div class="section-title">🛡️ Смена пароля админа</div>
       
       <div class="form-group">
-        <div class="input-wrapper">
-           <input type="password" name="admin_password" placeholder="Новый пароль">
-        </div>
+        <label>Пароль администратора</label>
+        <input type="password" name="admin_password" placeholder="Оставьте пустым, если не меняете">
       </div>
 
-      <button type="submit" id="submitBtn" class="submit">💾 Сохранить всё</button>
+      <button type="button" class="submit" onclick="handleFormSubmit()">💾 Сохранить реквизиты</button>
     </form>
     
     <div id="status" class="status"></div>
@@ -160,119 +166,133 @@
     <script>
       google.script.run.withSuccessHandler(populateForm).getPublicAuthSettings();
 
-      document.getElementById('vk_token').addEventListener('paste', function(e) {
-        e.preventDefault();
-        const text = (e.clipboardData || window.clipboardData).getData('text');
-        const match = text.match(/access_token=([a-zA-Z0-9\.\-_]+)/);
-        this.value = match ? match[1] : text.trim();
-        flashField(this);
+      // Умный парсинг для обоих полей токенов
+      [document.getElementById('user_token'), document.getElementById('vk_token')].forEach(el => {
+        el.addEventListener('paste', function(e) {
+          setTimeout(() => {
+            const text = this.value;
+            // Регулярка теперь ловит и обычный access_token, и групповой access_token_12345
+            const match = text.match(/access_token(?:_\d+)?=([a-zA-Z0-9\.\-_]+)/);
+            if (match) {
+              this.value = match[1];
+              flashField(this);
+            }
+          }, 100);
+        });
       });
 
-      function autoGetGroupId() {
-        const token = document.getElementById('vk_token').value;
-        const input = document.getElementById('group_id');
-        const btn = event.target;
-        const status = document.getElementById('status');
-
-        const originalText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = '...';
+      // Динамическое обновление ссылок
+      function updateLinks() {
+        const gidInput = document.getElementById('group_id').value;
+        const gidMatch = gidInput.match(/\d+/);
+        const gid = gidMatch ? gidMatch[0] : "";
         
-        google.script.run
-          .withSuccessHandler(function(id) {
-             btn.disabled = false;
-             btn.textContent = originalText;
-             input.value = id;
-             flashField(input);
-             status.textContent = '✅ ID группы найден!';
-             status.style.color = 'green';
-          })
-          .withFailureHandler(function(error) {
-             btn.disabled = false;
-             btn.textContent = originalText;
-             status.textContent = '❌ Ошибка: ' + error.message;
-             status.style.color = 'red';
-          })
-          .fetchVkGroupId(token, input.value);
+        const baseUrlGroup = 'https://oauth.vk.com/authorize?client_id=2685278&scope=274432&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token';
+        const groupLink = document.getElementById('vk_token_link');
+        groupLink.href = gid ? `${baseUrlGroup}&group_ids=${gid}` : baseUrlGroup;
       }
+
+      document.getElementById('group_id').addEventListener('input', updateLinks);
 
       function autoConnect() {
-        const form = document.getElementById('authForm');
-        const url = document.getElementById('web_app_url').value;
         const status = document.getElementById('status');
-        const btn = event.target;
-
-        if (!url) {
-          status.textContent = '❌ Введите Web App URL!';
-          status.style.color = 'red';
-          return;
-        }
+        const btn = document.querySelector('button.action');
 
         btn.disabled = true;
-        btn.textContent = 'Подключение...';
-        status.textContent = '⏳ Синхронизация с ВК...';
+        btn.textContent = '⏳ Выполняю 4 шага...';
+        status.textContent = '⏳ Настраиваю сервер и проверяю права группы...';
+        status.style.color = '#1976d2';
         
-        // 1. Сохраняем текущие поля
-        google.script.run
-          .withSuccessHandler(() => {
-             // 2. Подключаем
-             google.script.run
-               .withSuccessHandler((res) => {
-                  btn.disabled = false;
-                  btn.textContent = '🔌 Подключить бота к VK';
-                  status.textContent = res;
-                  status.style.color = 'green';
-               })
-               .withFailureHandler((err) => {
-                  btn.disabled = false;
-                  btn.textContent = '🔌 Подключить бота к VK';
-                  status.textContent = '❌ ' + err.message;
-                  status.style.color = 'red';
-               })
-               .connectBotToVk(url);
-          })
-          .saveAuthSettings(form);
-      }
+        const formData = {
+          group_id: document.getElementById('group_id').value,
+          user_token: document.getElementById('user_token').value,
+          vk_token: document.getElementById('vk_token').value,
+        };
 
-      function flashField(element) {
-        const original = element.style.borderColor;
-        element.style.borderColor = '#2e7d32';
-        element.style.backgroundColor = '#e8f5e9';
-        setTimeout(() => {
-          element.style.borderColor = original;
-          element.style.backgroundColor = '';
-        }, 800);
+        google.script.run
+          .withSuccessHandler((res) => {
+             btn.disabled = false;
+             btn.textContent = '🚀 ПОДКЛЮЧИТЬ И ПРОВЕРИТЬ';
+             status.textContent = res;
+             status.style.color = 'green';
+             google.script.run.withSuccessHandler(populateForm).getPublicAuthSettings();
+          })
+          .withFailureHandler((err) => {
+             btn.disabled = false;
+             btn.textContent = '🚀 ПОДКЛЮЧИТЬ И ПРОВЕРИТЬ';
+             status.textContent = '❌ ' + err.message;
+             status.style.color = 'red';
+          })
+          .connectBotToVk(formData);
       }
 
       function populateForm(settings) {
-        if (settings.group_id) document.getElementById('group_id').value = settings.group_id;
-        if (settings.web_app_url) document.getElementById('web_app_url').value = settings.web_app_url;
-        if (settings.payment_phone) document.getElementById('payment_phone').value = settings.payment_phone;
-        if (settings.payment_bank) document.getElementById('payment_bank').value = settings.payment_bank;
+        if (settings.group_id) {
+          document.getElementById('group_id').value = settings.group_id;
+          document.getElementById('hint_group_id').textContent = 'Текущий ID: ' + settings.group_id;
+          updateLinks();
+        }
+        
+        if (settings.has_user_token) {
+          document.getElementById('user_token').placeholder = '•••••••• (Сохранен)';
+          document.getElementById('hint_user_token').textContent = 'Admin Token: ✅ Сохранен';
+          document.getElementById('hint_user_token').style.color = 'green';
+        }
+
+        if (settings.has_vk_token) {
+          document.getElementById('vk_token').placeholder = '•••••••• (Сохранен)';
+          document.getElementById('hint_vk_token').textContent = 'Group Token: ✅ Сохранен';
+          document.getElementById('hint_vk_token').style.color = 'green';
+        }
+        
+        if (settings.payment_phone) {
+          document.getElementById('payment_phone').value = settings.payment_phone;
+          document.getElementById('hint_payment_phone').textContent = 'Текущий: ' + settings.payment_phone;
+        }
+        
+        if (settings.payment_bank) {
+          document.getElementById('payment_bank').value = settings.payment_bank;
+          document.getElementById('hint_payment_bank').textContent = 'Текущий: ' + settings.payment_bank;
+        }
       }
 
-      function handleFormSubmit(formObject) {
-        const btn = document.getElementById('submitBtn');
+      function handleFormSubmit() {
+        const form = document.getElementById('authForm');
+        const btn = document.querySelector('button.submit');
         const status = document.getElementById('status');
-        btn.disabled = true;
-        btn.textContent = 'Сохранение...';
-        status.textContent = '';
         
+        btn.disabled = true;
+        btn.textContent = '💾 Сохраняю...';
+        
+        const formData = {
+          group_id: document.getElementById('group_id').value,
+          user_token: document.getElementById('user_token').value,
+          vk_token: document.getElementById('vk_token').value,
+          payment_phone: document.getElementById('payment_phone').value,
+          payment_bank: document.getElementById('payment_bank').value,
+          admin_password: form.admin_password.value
+        };
+
         google.script.run
           .withSuccessHandler(function(response) {
             btn.disabled = false;
-            btn.textContent = '💾 Сохранить всё';
-            status.textContent = '✅ ' + response;
+            btn.textContent = '💾 Сохранить реквизиты';
+            status.textContent = '✅ Сохранено!';
             status.style.color = 'green';
             setTimeout(() => google.script.host.close(), 1500);
           })
           .withFailureHandler(function(error) {
             btn.disabled = false;
-            btn.textContent = '💾 Сохранить всё';
+            btn.textContent = '💾 Сохранить реквизиты';
             status.textContent = '❌ ' + error.message;
             status.style.color = 'red';
           })
-          .saveAuthSettings(formObject);
+          .saveAuthSettings(formData);
+      }
+
+      function flashField(element) {
+        element.style.backgroundColor = '#e8f5e9';
+        setTimeout(() => element.style.backgroundColor = '', 800);
       }
     </script>
   </body>

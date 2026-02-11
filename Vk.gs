@@ -18,7 +18,8 @@ const VK_EVENTS = {
 
 // ✅ ПРАВИЛЬНАЯ ФУНКЦИЯ VK API С ПОЛНЫМ ЛОГИРОВАНИЕМ И РЕТРАЯМИ
 function callVk(method, params, token = null, retryCount = 0) {
-  const debugMode = getSetting('DEBUG_VK_API') === 'TRUE';
+  const debug = getSetting('DEBUG_VK_API');
+  const debugMode = (debug === true || debug === 'TRUE');
   const authToken = token || getSetting('VK_TOKEN');
 
   if (!authToken) {
@@ -112,7 +113,7 @@ function callVk(method, params, token = null, retryCount = 0) {
         }
       }
 
-      logError('❌ callVk ERROR: ' + method, parsed.error, {
+      logError('❌ callVk ERROR: ' + method, parsed.error.error_msg || parsed.error, {
         sentParams: Object.keys(params).join(', '),
         error_code: errorCode,
         error_msg: parsed.error.error_msg,
@@ -156,21 +157,9 @@ function callVk(method, params, token = null, retryCount = 0) {
   }
 }
 
-function getVkToken() {
-  return PropertiesService.getScriptProperties().getProperty("VK_TOKEN") || "";
-}
-
-function getVkGroupId() {
-  return String(PropertiesService.getScriptProperties().getProperty("GROUP_ID") || "").replace("-", "");
-}
-
-/**
- * Gets the confirmation code from the VK server and stores it.
- * @returns {string|null} The confirmation code or null on failure.
- */
 function getVkConfirmationCodeFromServer() {
   const groupId = getVkGroupId();
-  const res = callVk("groups.getCallbackConfirmationCode", { group_id: groupId });
+  const res = callVk("groups.getCallbackConfirmationCode", { group_id: groupId }, getVkToken(true));
 
   // The modified callVk returns the 'response' object directly
   if (res && res.response && res.response.code) {
@@ -192,6 +181,7 @@ function getVkConfirmationCodeFromServer() {
 function setupCallbackServerAutomatic(url) {
   const groupId = getVkGroupId();
   const props = PropertiesService.getScriptProperties();
+  const adminToken = getVkToken(true);
 
   let secret = props.getProperty("VK_SECRET");
   if (!secret) {
@@ -201,9 +191,10 @@ function setupCallbackServerAutomatic(url) {
   }
 
   const code = getVkConfirmationCodeFromServer();
-  if (!code) throw new Error("Не удалось получить код подтверждения от VK.");
+  // Код может не прийти сразу, если сервер ещё не подтвержден, но это не должно блокировать создание записи сервера
+  if (!code) logInfo('setupCallbackServer: Confirmation code not received yet, will try during verification.');
 
-  const servers = callVk("groups.getCallbackServers", { group_id: groupId });
+  const servers = callVk("groups.getCallbackServers", { group_id: groupId }, adminToken);
   let serverId = null;
 
   if (servers && servers.response && servers.response.items) {
@@ -211,7 +202,7 @@ function setupCallbackServerAutomatic(url) {
       if (existing) {
           if (existing.status === 'failed') {
               logInfo(`Found existing server with "failed" status (ID: ${existing.id}). Deleting it now...`);
-              callVk("groups.deleteCallbackServer", { group_id: groupId, server_id: String(existing.id) });
+              callVk("groups.deleteCallbackServer", { group_id: groupId, server_id: String(existing.id) }, adminToken);
               logInfo(`Server ID ${existing.id} deleted.`);
               // Server ID is now null, so a new one will be created.
           } else {
@@ -225,7 +216,7 @@ function setupCallbackServerAutomatic(url) {
 
   if (!serverId) {
     logInfo('No active server found. Creating a new one...');
-    const res = callVk("groups.addCallbackServer", { group_id: groupId, url: String(url), title: "GAS_Auction_Bot", secret_key: secret });
+    const res = callVk("groups.addCallbackServer", { group_id: groupId, url: String(url), title: "GAS_Auction_Bot", secret_key: secret }, adminToken);
     if (res && res.response && res.response.server_id) {
         serverId = String(res.response.server_id);
         logInfo('Added new callback server with ID: ' + serverId);
@@ -239,7 +230,7 @@ function setupCallbackServerAutomatic(url) {
   eventSettings['wall_reply_new'] = 1;
   eventSettings['message_new'] = 1;
 
-  const setResult = callVk("groups.setCallbackSettings", eventSettings);
+  const setResult = callVk("groups.setCallbackSettings", eventSettings, adminToken);
   if (setResult === 1 || (setResult && setResult.response === 1)) {
       logInfo('Successfully set callback settings for server ID: ' + serverId);
   } else {
@@ -276,12 +267,26 @@ function sendMessage(userId, message) {
   return result;
 }
 
+function getVkToken(isAdminAction = false) {
+  const props = PropertiesService.getScriptProperties();
+  if (isAdminAction) {
+    return props.getProperty("USER_TOKEN") || props.getProperty("VK_TOKEN");
+  }
+  return props.getProperty("VK_TOKEN") || "";
+}
+
+function getVkGroupId() {
+  const gid = PropertiesService.getScriptProperties().getProperty("GROUP_ID");
+  return gid ? String(gid).replace("-", "") : "";
+}
+
 function postCommentToLot(postId, message) {
   return callVk("wall.createComment", {
     owner_id: "-" + getVkGroupId(),
     post_id: String(postId),
+    from_group: 1,
     message: message
-  });
+  }, getVkToken(false)); // Используем Group Token
 }
 
 function replyToComment(postId, commentId, message) {
@@ -289,8 +294,9 @@ function replyToComment(postId, commentId, message) {
     owner_id: "-" + getVkGroupId(),
     post_id: String(postId),
     reply_to_comment: String(commentId),
+    from_group: 1,
     message: message
-  });
+  }, getVkToken(false)); // Используем Group Token
 }
 
 function getUsersInfo(userIds) {
