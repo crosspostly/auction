@@ -188,15 +188,17 @@ function connectBotToVk(form) {
     const groupIdRaw = extractGroupId(form.group_id);
     const userToken = form.user_token || props.getProperty('USER_TOKEN');
     const vkToken = form.vk_token || props.getProperty('VK_TOKEN');
-    const url = props.getProperty('WEB_APP_URL');
+    const url = form.web_app_url || props.getProperty('WEB_APP_URL');
 
     if (!groupIdRaw) throw new Error("Введите ID или ссылку на группу (Шаг 1).");
+    if (!url) throw new Error("Введите URL Веб-приложения (Шаг 1).");
     if (!userToken) throw new Error("Нужен Admin Token (Шаг 2).");
     if (!vkToken) throw new Error("Нужен Group Token (Шаг 3).");
 
     // Сбрасываем кэш, чтобы новые токены подхватились мгновенно
     props.setProperty('USER_TOKEN', userToken);
     props.setProperty('VK_TOKEN', vkToken);
+    props.setProperty('WEB_APP_URL', url);
     cache.remove('settings');
 
     // 2. Уточняем цифровой ID группы
@@ -2130,7 +2132,12 @@ function testVkConnection() {
     // Получаем настройки
     const settings = getSettings();
     const groupId = getVkGroupId();
-    const webAppUrl = settings.WEB_APP_URL || ScriptApp.getService().getUrl();
+    const webAppUrl = settings.WEB_APP_URL; // Строго из настроек
+    
+    if (!webAppUrl) {
+       results.push('❌ ОШИБКА: WEB_APP_URL не найден в свойствах скрипта. Выполните настройку.');
+    }
+    
     // 1. Проверка информации о группе
     let groupInfo;
     try {
@@ -2205,30 +2212,31 @@ function enqueueEvent(payload) {
  * This function is triggered every minute by a time-based trigger.
  */
 function processEventQueue(L) {
-  if (!L) L = (msg, data) => logDebug(msg, data); // Fallback to default logger
+  // Если вызвана триггером, L будет объектом события. Проверяем, функция ли это.
+  const logger = (typeof L === 'function') ? L : ((msg, data) => logDebug(msg, data));
 
   const rows = getSheetData("EventQueue");
-  L(`[DEBUG] processEventQueue started. Found ${rows.length} total rows.`);
+  logger(`[DEBUG] processEventQueue started. Found ${rows.length} total rows.`);
   let processed = 0;
   
   for (const row of rows) {
     if (processed >= 50) {
-      L(`[DEBUG] Hit processing limit of 50.`);
+      logger(`[DEBUG] Hit processing limit of 50.`);
       break;
     }
     
     const eventId = row.data.eventId || 'no_id';
     const currentStatus = String(row.data.status || "").toLowerCase().trim();
-    L(`[DEBUG] Row ${row.rowIndex}: ID=${eventId}, Status='${currentStatus}'.`);
+    logger(`[DEBUG] Row ${row.rowIndex}: ID=${eventId}, Status='${currentStatus}'.`);
 
     if (currentStatus !== "pending") {
       continue;
     }
     
-    L(`[DEBUG] Processing row ${row.rowIndex}...`);
+    logger(`[DEBUG] Processing row ${row.rowIndex}...`);
     try {
       const payload = JSON.parse(row.data.payload);
-      L(`[DEBUG] Routing event type: ${payload.type}`);
+      logger(`[DEBUG] Routing event type: ${payload.type}`);
       routeEvent(payload);
       
       updateRow("EventQueue", row.rowIndex, { 
@@ -2237,7 +2245,7 @@ function processEventQueue(L) {
       });
       
       processed++;
-      L(`[DEBUG] Row ${row.rowIndex} successfully processed.`);
+      logger(`[DEBUG] Row ${row.rowIndex} successfully processed.`);
       Monitoring.recordEvent('EVENT_PROCESSED', { eventId: row.data.eventId, eventType: payload.type });
     } catch (error) {
       logError('processEventQueue', error, row.data.payload);
@@ -2245,7 +2253,7 @@ function processEventQueue(L) {
         status: "failed", 
         receivedAt: row.data.receivedAt 
       });
-      L(`[DEBUG] Row ${row.rowIndex} failed to process: ${error.message}`);
+      logger(`[DEBUG] Row ${row.rowIndex} failed to process: ${error.message}`);
       Monitoring.recordEvent('EVENT_PROCESSING_FAILED', { 
         eventId: row.data.eventId, 
         error: error.message,

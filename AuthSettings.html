@@ -99,13 +99,21 @@
     <h3>🔐 Мастер подключения бота (4 шага)</h3>
     <form id="authForm" onsubmit="return false;">
       
-      <div class="section-title">📡 Шаг 1: Группа</div>
+      <div class="section-title">📡 Шаг 1: Группа и Сервер</div>
       <div class="form-group">
         <label>ID или Ссылка на группу</label>
         <div class="input-wrapper">
           <input type="text" id="group_id" name="group_id" placeholder="vk.com/club123 или 123456">
         </div>
         <div class="hint" id="hint_group_id">Текущий ID: (не задан)</div>
+      </div>
+
+      <div class="form-group">
+        <label>URL Веб-приложения (из Deploy)</label>
+        <div class="input-wrapper">
+          <input type="text" id="web_app_url" name="web_app_url" placeholder="https://script.google.com/macros/s/...">
+        </div>
+        <div class="hint" id="hint_web_app_url">Текущий URL: (не задан)</div>
       </div>
 
       <div class="section-title">🔑 Шаг 2: Admin Token (для настроек)</div>
@@ -205,6 +213,7 @@
         
         const formData = {
           group_id: document.getElementById('group_id').value,
+          web_app_url: document.getElementById('web_app_url').value,
           user_token: document.getElementById('user_token').value,
           vk_token: document.getElementById('vk_token').value,
         };
@@ -231,6 +240,11 @@
           document.getElementById('group_id').value = settings.group_id;
           document.getElementById('hint_group_id').textContent = 'Текущий ID: ' + settings.group_id;
           updateLinks();
+        }
+
+        if (settings.web_app_url) {
+          document.getElementById('web_app_url').value = settings.web_app_url;
+          document.getElementById('hint_web_app_url').textContent = 'Текущий URL: ' + (settings.web_app_url.substring(0, 40) + '...');
         }
         
         if (settings.has_user_token) {
@@ -266,6 +280,7 @@
         
         const formData = {
           group_id: document.getElementById('group_id').value,
+          web_app_url: document.getElementById('web_app_url').value,
           user_token: document.getElementById('user_token').value,
           vk_token: document.getElementById('vk_token').value,
           payment_phone: document.getElementById('payment_phone').value,
