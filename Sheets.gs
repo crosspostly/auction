@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
   bid_step: 50,
   min_bid_increment: 50,
   max_bid: 1000000,
-  delivery_rules: JSON.stringify({ "1-3": 450, "4-6": 550, "7+": 650 }),
+  delivery_rules: '{"1-3":450,"4-6":550,"7+":650}',
   order_summary_template: `Добрый день!
 
 Ваши выигранные лоты:
@@ -37,7 +37,6 @@ const DEFAULT_SETTINGS = {
 
 📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
 Напишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.`,
-  shipping_confirmation_template: ``,
   lot_post_template: `#аукцион@dndpotustoronu №{LOT_ID}
 При поддержке GABRIGAME-WORKSHOP!
 Дедлайн {DEADLINE} по МСК!
@@ -61,13 +60,20 @@ const DEFAULT_SETTINGS = {
 https://vk.com/wall{post_id}`,
   low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉
 https://vk.com/wall{post_id}`,
-  winner_notification_template: ``,
-  winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы "Аукцион ({date})", чтобы забрать свой лот`,
-  unsold_lot_comment_template: `❌ Лот не продан`,
+  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!
+Напишите "АУКЦИОН".`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
   invalid_step_template: `👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨`,
   max_bid_exceeded_template: `Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉`,
-  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`
+  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`,
+  bid_step_enabled: 'ВКЛ',
+  require_subscription: 'ВЫКЛ',
+  subscription_check_enabled: 'ВЫКЛ',
+  debug_logging_enabled: 'ВЫКЛ',
+  reply_on_invalid_bid_enabled: 'ВКЛ',
+  send_winner_dm_enabled: 'ВКЛ',
+  notification_preference: 'comment',
+  saturday_only_enabled: 'ВКЛ'
 };
 
 const SETTINGS_DESCRIPTIONS = {
@@ -78,31 +84,32 @@ const SETTINGS_DESCRIPTIONS = {
   max_bid: "Максимально допустимая ставка (защита от опечаток)",
   delivery_rules: 'Правила доставки (JSON). Формат: "кол-во":цена',
   order_summary_template: "Шаблон сообщения победителю с деталями заказа",
-  shipping_confirmation_template: "Шаблон подтверждения получения данных для доставки",
+  lot_post_template: "Шаблон поста с лотом для симулятора",
   outbid_notification_template: "Шаблон уведомления о перебитой ставке",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
   winner_notification_template: "Шаблон уведомления победителю",
-  winner_comment_template: "Шаблон комментария о победе с упоминанием пользователя",
-  unsold_lot_comment_template: "Шаблон комментария для не проданного лота",
   subscription_required_template: "Шаблон уведомления о необходимости подписки",
   invalid_step_template: "Шаблон уведомления о некорректном шаге ставки",
   max_bid_exceeded_template: "Шаблон уведомления о превышении максимальной ставки",
   auction_finished_template: "Шаблон уведомления о завершении аукциона",
   bid_step_enabled: "Включить проверку шага ставки (ВКЛ/ВЫКЛ)",
+  require_subscription: "Требовать подписку для участия (ВКЛ/ВЫКЛ)",
   subscription_check_enabled: "Проверять подписку на группу перед приемом ставки (ВКЛ/ВЫКЛ)",
   debug_logging_enabled: "Включить подробные технические логи (ВКЛ/ВЫКЛ)",
   reply_on_invalid_bid_enabled: "Отвечать комментарием на некорректные ставки (шаг, цена) (ВКЛ/ВЫКЛ)",
   send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)",
-  saturday_only_enabled: "Проверять только субботние посты (ВКЛ/ВЫКЛ)"
+  notification_preference: "Предпочтительный способ уведомления (comment/dm)",
+  saturday_only_enabled: "Обрабатывать только посты, опубликованные в субботу (ВКЛ/ВЫКЛ)"
 };
 
 const TOGGLE_SETTINGS = {
   bid_step_enabled: "ВКЛ",
+  require_subscription: 'ВЫКЛ',
   subscription_check_enabled: "ВЫКЛ",
   debug_logging_enabled: "ВЫКЛ",
   reply_on_invalid_bid_enabled: "ВКЛ",
   send_winner_dm_enabled: "ВКЛ",
-  saturday_only_enabled: "ВКЛ"  // NEW: Check only Saturday posts
+  saturday_only_enabled: "ВКЛ"  
 };
 
 var _ss_cache = null;
@@ -351,54 +358,47 @@ function createDemoData() {
   if (lotSheet.getLastRow() <= 1) {
     appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
   }
-  const settingsSheet = getSheet('Settings');
-  const data = settingsSheet.getDataRange().getValues();
-  const keysPresent = new Set(data.map(r => r[0])); // Use Set for faster lookups
 
-  // Clear existing settings data (except headers) before writing new structured data
-  if (data.length > 1) {
-    settingsSheet.deleteRows(2, data.length - 1);
+  const settingsSheet = getSheet('Settings');
+  // Очищаем существующие настройки (кроме заголовков)
+  const dataRange = settingsSheet.getDataRange();
+  if (dataRange.getNumRows() > 1) {
+    settingsSheet.deleteRows(2, dataRange.getNumRows() - 1);
   }
 
+  const addSetting = (key, value, description) => {
+    settingsSheet.appendRow([key, value, description]);
+  };
+
   // --- АДМИНИСТРАТОР ---
-  settingsSheet.appendRow(["--- АДМИНИСТРАТОР ---", "", ""]);
-  if (!keysPresent.has("ADMIN_IDS")) settingsSheet.appendRow(["ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS]);
+  addSetting("--- АДМИНИСТРАТОР ---", "", "");
+  addSetting("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
 
   // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
-  settingsSheet.appendRow(["--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", ""]);
-  const mainSettingsKeys = ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"];
-  mainSettingsKeys.forEach(key => {
-    settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
-  });
-  
+  addSetting("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
+  for (const key of ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"]) {
+    addSetting(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  }
+
   // --- ПЕРЕКЛЮЧАТЕЛИ ---
-  settingsSheet.appendRow(["--- ПЕРЕКЛЮЧАТЕЛИ ---", "", ""]);
-  const toggleSettingsKeys = Object.keys(TOGGLE_SETTINGS);
-  toggleSettingsKeys.forEach(key => {
-    settingsSheet.appendRow([key, TOGGLE_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
-  });
+  addSetting("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
+  for (const key of Object.keys(TOGGLE_SETTINGS)) {
+    addSetting(key, TOGGLE_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  }
 
   // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
-  settingsSheet.appendRow(["--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", ""]);
+  addSetting("--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", "");
+  addSetting("notification_preference", DEFAULT_SETTINGS.notification_preference, SETTINGS_DESCRIPTIONS.notification_preference);
+
   // --- ШАБЛОНЫ ---
-  settingsSheet.appendRow(["--- ШАБЛОНЫ ---", "", ""]);
-  const templateSettingsKeys = Object.keys(DEFAULT_SETTINGS).filter(k => k.endsWith('_template'));
-  templateSettingsKeys.forEach(key => {
-    // Проверяем, есть ли уже такое значение в таблице
-    if (!keysPresent.has(key)) {
-      settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key] || ""]);
-    } else {
-      // Если шаблон содержит ошибку "Ошибка: шаблон не найден", обновляем его
-      const allRows = settingsSheet.getDataRange().getValues();
-      const currentRow = allRows.findIndex(row => row[0] === key);
-      if (currentRow !== -1 && allRows[currentRow][1] === "Ошибка: шаблон не найден.") {
-        settingsSheet.getRange(currentRow + 1, 2).setValue(DEFAULT_SETTINGS[key]); // Обновляем значение
-      }
-    }
-  });
+  addSetting("--- ШАБЛОНЫ ---", "", "");
+  const templateKeys = Object.keys(DEFAULT_SETTINGS).filter(key => key.endsWith('_template'));
+  for (const key of templateKeys) {
+    addSetting(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  }
   
-  applyDropdownValidation(); // Apply dropdowns after creating settings
-  setupConditionalFormatting(); // Apply conditional formatting
+  applyDropdownValidation(); // Применяем выпадающие списки
+  setupConditionalFormatting(); // Применяем условное форматирование
 }
 
 function applyDropdownValidation() {
