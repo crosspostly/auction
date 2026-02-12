@@ -44,35 +44,47 @@ function doGet(e) {
  */
 function doPost(e) {
   try {
+    const rawPayload = e.postData.contents;
+    const data = JSON.parse(rawPayload);
+
+    // 1. Логируем входящее событие в сыром виде (новое требование)
+    logIncomingRaw(data, rawPayload);
+
     // Детальный лог только в режиме отладки
     logDebug('📨 doPost called', {
       hasPostData: !!e.postData,
       contentLength: e.postData ? e.postData.length : 0,
-      contents: e.postData ? e.postData.contents.substring(0, 500) : 'none' 
+      contents: rawPayload.substring(0, 500)
     });
-    const data = JSON.parse(e.postData.contents);
 
     // For confirmation requests, reply immediately with the confirmation code.
-        if (data.type === 'confirmation') {
-          const groupId = String(data.group_id);
-          const cache = CacheService.getScriptCache();
-          const codeFromCache = cache.get("CONFIRM_" + groupId);
-          const codeFromProps = PropertiesService.getScriptProperties().getProperty("CONFIRMATION_CODE");
-          const codeToReturn = codeFromCache || codeFromProps;
-          logInfo("❗ Confirmation Handshake Attempt", {
-            "1_RAW_REQUEST_FROM_VK": e.postData.contents,
-            "2_PARSED_GROUP_ID": groupId,
-            "3_CODE_FOUND_IN_CACHE": codeFromCache || "null",
-            "4_CODE_FOUND_IN_PROPS": codeFromProps || "null",
-            "5_FINAL_CODE_TO_RETURN": codeToReturn || "null or empty"
-          });
-          return ContentService.createTextOutput(String(codeToReturn || "").trim()).setMimeType(ContentService.MimeType.TEXT);
-        }
-
-    // For all other events, enqueue them and immediately return "ok".
-    if (data.type) {
-      enqueueEvent(e.postData.contents);
+    if (data.type === 'confirmation') {
+      const groupId = String(data.group_id);
+      const cache = CacheService.getScriptCache();
+      const codeFromCache = cache.get("CONFIRM_" + groupId);
+      const codeFromProps = PropertiesService.getScriptProperties().getProperty("CONFIRMATION_CODE");
+      const codeToReturn = codeFromCache || codeFromProps;
+      logInfo("❗ Confirmation Handshake Attempt", {
+        "1_RAW_REQUEST_FROM_VK": rawPayload,
+        "2_PARSED_GROUP_ID": groupId,
+        "3_CODE_FOUND_IN_CACHE": codeFromCache || "null",
+        "4_CODE_FOUND_IN_PROPS": codeFromProps || "null",
+        "5_FINAL_CODE_TO_RETURN": codeToReturn || "null or empty"
+      });
+      return ContentService.createTextOutput(String(codeToReturn || "").trim()).setMimeType(ContentService.MimeType.TEXT);
     }
+
+    // Мгновенная обработка события (новое требование)
+    if (data.type) {
+      try {
+        routeEvent(data);
+      } catch (procError) {
+        // Если мгновенная обработка не удалась - ставим в очередь для ретрая
+        logError('doPost_processing_failed_retrying', procError, rawPayload);
+        enqueueEvent(rawPayload);
+      }
+    }
+    
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
   } catch (error) {
     logError('doPost_critical', error, e.postData ? e.postData.contents : 'no post data');
@@ -326,13 +338,16 @@ function checkVkCallbackServer() {
             'message_new'
           ];
           
+          // VK может возвращать ответ в разной вложенности
+          const respData = settings.response.response || settings.response;
+          
           events.forEach(event => {
-            const enabled = settings.response[event] === 1 ? '✅ ВКЛ' : '❌ ВЫКЛ';
+            const enabled = respData[event] === 1 ? '✅ ВКЛ' : '❌ ВЫКЛ';
             serverInfo.push(`${event}: ${enabled}`);
           });
           
           // Если события выключены - включаем их
-          const disabledEvents = events.filter(event => settings.response[event] !== 1);
+          const disabledEvents = events.filter(event => respData[event] !== 1);
           if (disabledEvents.length > 0) {
             serverInfo.push(`\n🔧 ВКЛЮЧАЕМ СОБЫТИЯ...`);
             
@@ -367,6 +382,24 @@ function checkVkCallbackServer() {
     } else {
       serverInfo.push(`\n❌ Не удалось получить список серверов`);
       serverInfo.push(`Ошибка: ${JSON.stringify(servers)}`);
+    }
+
+    // Добавляем информацию о последних событиях из листа "Входящие"
+    serverInfo.push(`\n=== ПОСЛЕДНИЕ СОБЫТИЯ (Real-time) ===`);
+    try {
+      const incomingData = getSheetData("Incoming");
+      if (incomingData && incomingData.length > 0) {
+        // Берем последние 5 событий
+        const lastEvents = incomingData.slice(-5).reverse();
+        lastEvents.forEach(evt => {
+          const date = evt.data.date instanceof Date ? evt.data.date.toLocaleTimeString() : String(evt.data.date);
+          serverInfo.push(`[${date}] ${evt.data.type}`);
+        });
+      } else {
+        serverInfo.push(`Событий пока нет.`);
+      }
+    } catch (e) {
+      serverInfo.push(`Ошибка при получении списка событий.`);
     }
     
     ui.alert('Состояние Callback сервера VK', serverInfo.join('\n'), ui.ButtonSet.OK);
@@ -1580,9 +1613,6 @@ function setupTriggers() {
   // Trigger for processing the notification queue every 5 minutes (GAS limitation)
   ScriptApp.newTrigger("processNotificationQueue").timeBased().everyMinutes(5).create();
 
-  // Trigger for processing the new event queue every 5 minutes (GAS limitation)
-  ScriptApp.newTrigger("processEventQueue").timeBased().everyMinutes(5).create();
-
   // Trigger for finalizing the auction on a schedule
   ScriptApp.newTrigger("finalizeAuction").timeBased().onWeekDay(ScriptApp.WeekDay.SATURDAY).atHour(21).create();
   
@@ -1627,151 +1657,6 @@ function buildPostKey(ownerId, postId) { return `${ownerId}_${postId}`; }
 function parsePostKey(postKey) {
   const parts = String(postKey).split("_");
   return parts.length === 2 ? { ownerId: Number(parts[0]), postId: Number(parts[1]) } : { ownerId: null, postId: Number(postKey) };
-}
-
-/**
- * Sets up periodic monitoring triggers
- */
-function setupPeriodicMonitoring() {
-  try {
-    // Get all current triggers
-    const triggers = ScriptApp.getProjectTriggers();
-    
-    // Remove existing monitoring triggers to avoid duplicates
-    triggers.forEach(trigger => {
-      const handler = trigger.getHandlerFunction();
-      if (handler === 'periodicSystemCheck') {
-        ScriptApp.deleteTrigger(trigger);
-      }
-    });
-    
-    // Create new trigger to run every 10 minutes
-    ScriptApp.newTrigger('periodicSystemCheck')
-      .timeBased()
-      .everyMinutes(10)
-      .create();
-    
-    Logger.log('Настроен периодический мониторинг (каждые 10 минут)');
-    Monitoring.recordEvent('PERIODIC_MONITORING_SETUP', {
-      frequency: 'every 10 minutes',
-      timestamp: new Date()
-    });
-    
-  } catch (error) {
-    Logger.log(`Ошибка при настройке периодического мониторинга: ${error.message}`);
-    Monitoring.recordEvent('PERIODIC_MONITORING_SETUP_ERROR', {
-      error: error.message
-    });
-  }
-}
-
-/**
- * Sets up daily maintenance trigger
- */
-function setupDailyMaintenance() {
-  try {
-    // Get all current triggers
-    const triggers = ScriptApp.getProjectTriggers();
-    
-    // Remove existing maintenance triggers to avoid duplicates
-    triggers.forEach(trigger => {
-      const handler = trigger.getHandlerFunction();
-      if (handler === 'dailyMaintenance') {
-        ScriptApp.deleteTrigger(trigger);
-      }
-    });
-    
-    // Create new trigger to run daily at 2 AM
-    ScriptApp.newTrigger('dailyMaintenance')
-      .timeBased()
-      .everyDays(1)
-      .atHour(2)
-      .create();
-    
-    Logger.log('Настроено ежедневное обслуживание (каждый день в 2:00)');
-    Monitoring.recordEvent('DAILY_MAINTENANCE_SETUP', {
-      frequency: 'daily at 2 AM',
-      timestamp: new Date()
-    });
-    
-  } catch (error) {
-    Logger.log(`Ошибка при настройке ежедневного обслуживания: ${error.message}`);
-    Monitoring.recordEvent('DAILY_MAINTENANCE_SETUP_ERROR', {
-      error: error.message
-    });
-  }
-}
-
-/**
- * Function to be called periodically to monitor system health
- * This can be set up as a time-based trigger
- */
-function periodicSystemCheck() {
-  try {
-    // Perform continuous monitoring
-    const stats = continuousMonitoring();
-    
-    // Perform a light health check
-    const healthResults = [];
-    
-    // Check if critical queues are too full
-    const eventQueueSize = getSheetData("EventQueue").filter(e => e.data.status === "pending").length;
-    const notificationQueueSize = getSheetData("NotificationQueue").filter(n => n.data.status === "pending").length;
-    
-    if (eventQueueSize > 50) {
-      Monitoring.recordEvent('ALERT_HIGH_EVENT_QUEUE', { count: eventQueueSize });
-    }
-    
-    if (notificationQueueSize > 100) {
-      Monitoring.recordEvent('ALERT_HIGH_NOTIFICATION_QUEUE', { count: notificationQueueSize });
-    }
-    
-    // Log successful periodic check
-    Monitoring.recordEvent('PERIODIC_CHECK_COMPLETED', {
-      timestamp: new Date(),
-      eventQueuePending: eventQueueSize,
-      notificationQueuePending: notificationQueueSize,
-      stats: stats
-    });
-    
-  } catch (error) {
-    Monitoring.recordEvent('PERIODIC_CHECK_ERROR', {
-      error: error.message,
-      stack: error.stack
-    });
-    Logger.log(`Ошибка в периодической проверке: ${error.message}`);
-  }
-}
-
-/**
- * Function to run maintenance tasks
- * This can be scheduled to run daily
- */
-function dailyMaintenance() {
-  try {
-    // Clean up old logs (older than 30 days)
-    cleanupOldLogs();
-    
-    // Clean up old statistics (older than 90 days)
-    cleanupOldStats();
-    
-    // Check system health
-    const results = systemHealthCheck();
-    
-    // Log maintenance completion
-    Monitoring.recordEvent('DAILY_MAINTENANCE_COMPLETED', {
-      timestamp: new Date(),
-      checksPerformed: results.length,
-      issuesFound: results.filter(r => !r.passed).length
-    });
-    
-  } catch (error) {
-    Monitoring.recordEvent('DAILY_MAINTENANCE_ERROR', {
-      error: error.message,
-      stack: error.stack
-    });
-    Logger.log(`Ошибка в ежедневном обслуживании: ${error.message}`);
-  }
 }
 
 /**
@@ -1998,7 +1883,6 @@ function createMissingSheets(missingSheets) {
 function checkRequiredTriggers() {
   try {
     const requiredTriggers = [
-      { func: 'processEventQueue', type: 'time' },
       { func: 'processNotificationQueue', type: 'time' },
       { func: 'finalizeAuction', type: 'time' }
     ];

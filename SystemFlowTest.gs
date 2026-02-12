@@ -93,15 +93,16 @@ function testPostArrivalFlow() {
       return { testName, passed: false, error: "Статус лота не 'active'" };
     }
     
-    // Check if Statistics sheet was updated
-    const statsRows = getSheetData("Statistics");
-    const lotCreatedEvent = statsRows.find(s => 
-      s.data.EventType === 'LOT_CREATED' && 
-      s.data.Details.includes(testLotId)
+    // Check if Logs sheet was updated
+    const logsRows = getSheetData("Logs");
+    const lotCreatedEvent = logsRows.find(s => 
+      s.data.type === 'MONITORING' && 
+      s.data.message === 'LOT_CREATED' && 
+      s.data.details.includes(testLotId)
     );
     
     if (!lotCreatedEvent) {
-      console.log("Предупреждение: Событие LOT_CREATED не найдено в статистике (это может быть нормально для теста)");
+      console.log("Предупреждение: Событие LOT_CREATED не найдено в журнале (это может быть нормально для теста)");
     }
     
     return { testName, passed: true };

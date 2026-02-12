@@ -60,7 +60,7 @@ function systemHealthCheck() {
  */
 function checkRequiredSheets() {
   try {
-    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'EventQueue', 'NotificationQueue', 'Logs', 'Incoming'];
     const missingSheets = [];
 
     for (const sheetKey of requiredSheets) {
@@ -112,7 +112,6 @@ function createMissingSheets(missingSheets) {
 function checkRequiredTriggers() {
   try {
     const requiredTriggers = [
-      { func: 'processEventQueue', type: 'time' },
       { func: 'processNotificationQueue', type: 'time' },
       { func: 'finalizeAuction', type: 'time' }
     ];
@@ -162,8 +161,40 @@ function recreateMissingTriggers(missingTriggers) {
  * Checks for stuck events in EventQueue
  */
 function checkStuckEvents() {
-  // EventQueue has been removed, so skip this check
-  return { testName: 'Проверка застрявших событий', passed: true };
+  try {
+    const rows = getSheetData("EventQueue");
+    const now = new Date();
+    const stuckEvents = [];
+    
+    for (const row of rows) {
+      if (row.data.status === "pending") {
+        const receivedAt = new Date(row.data.receivedAt || row.data.date);
+        const timeDiff = (now - receivedAt) / (1000 * 60); // minutes
+        
+        if (timeDiff > 30) {
+          stuckEvents.push({
+            eventId: row.data.eventId,
+            status: row.data.status,
+            timePending: timeDiff
+          });
+        }
+      }
+    }
+    
+    if (stuckEvents.length > 0) {
+      return { 
+        testName: 'Проверка застрявших событий', 
+        passed: false, 
+        error: `Найдено ${stuckEvents.length} застрявших событий в очереди (ошибки doPost)`,
+        action: 'processEventQueue', // Can be run manually
+        data: stuckEvents
+      };
+    }
+    
+    return { testName: 'Проверка застрявших событий', passed: true };
+  } catch (error) {
+    return { testName: 'Проверка застрявших событий', passed: false, error: error.message };
+  }
 }
 
 /**

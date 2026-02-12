@@ -291,7 +291,7 @@ function testSheetsAccessible() {
   testLog(`Starting ${testName}`);
   
   try {
-    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'EventQueue', 'NotificationQueue', 'Logs', 'Incoming'];
     
     const results = requiredSheets.map(sheetKey => {
       try {

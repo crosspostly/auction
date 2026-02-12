@@ -6,6 +6,7 @@ const SHEETS = {
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
+  Incoming: { name: "Входящие", headers: ["date", "type", "group_id", "payload"] },
   Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
 };
 
@@ -227,6 +228,36 @@ function logDebug(msg, det) {
 }
 function logError(src, err, pay) { log("ОШИБКА", `[${src}] ${err.message || String(err)}`, pay); }
 function logIncoming(data) { log("ВХОДЯЩИЙ", "Webhook от VK", data); }
+
+/**
+ * Logs raw incoming VK events to the "Входящие" sheet and keeps only the last 100 rows.
+ * @param {object} data - The parsed VK event data.
+ * @param {string} rawPayload - The raw JSON string from VK.
+ */
+function logIncomingRaw(data, rawPayload) {
+  try {
+    const sheet = getSheet("Incoming");
+    
+    // Add new row
+    appendRow("Incoming", {
+      date: new Date(),
+      type: data.type || "unknown",
+      group_id: data.group_id || "",
+      payload: rawPayload
+    });
+
+    // Keep only last 100 rows
+    const maxRows = 100;
+    const lastRow = sheet.getLastRow();
+    if (lastRow > maxRows + 1) { // +1 for header
+      const rowsToDelete = lastRow - (maxRows + 1);
+      sheet.deleteRows(2, rowsToDelete);
+    }
+  } catch (e) {
+    // If logging fails, we don't want to crash the whole process
+    console.error("Failed to log raw incoming event", e);
+  }
+}
 
 function toggleSystemSheets(hide) {
   const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs"];

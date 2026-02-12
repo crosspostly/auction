@@ -100,7 +100,7 @@ function testSettingsConfiguration() {
 function testSheetsAvailability() {
   const testName = "Проверка доступности листов";
   try {
-    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'EventQueue', 'NotificationQueue', 'Logs', 'Incoming'];
     
     const availableSheets = [];
     const missingSheets = [];

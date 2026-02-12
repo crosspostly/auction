@@ -8,6 +8,9 @@
  */
 function periodicSystemCheck() {
   try {
+    // Process error buffer (EventQueue)
+    processEventQueue();
+
     // Perform continuous monitoring
     const stats = continuousMonitoring();
     
