@@ -223,10 +223,15 @@ function setupCallbackServerAutomatic(url) {
     }
   }
 
-  const eventSettings = { group_id: groupId, server_id: serverId };
-  eventSettings['wall_post_new'] = 1;
-  eventSettings['wall_reply_new'] = 1;
-  eventSettings['message_new'] = 1;
+  const eventSettings = { 
+    group_id: groupId, 
+    server_id: serverId,
+    wall_post_new: 1,
+    wall_reply_new: 1,
+    wall_reply_edit: 1,
+    wall_reply_delete: 1,
+    message_new: 1
+  };
 
   const setResult = callVk("groups.setCallbackSettings", eventSettings, adminToken);
   if (setResult === 1 || (setResult && setResult.response === 1)) {
