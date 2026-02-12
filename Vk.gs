@@ -249,17 +249,39 @@ function getCallbackEventsStatus(groupId, serverId) {
     server_id: serverId
   }, adminToken);
   
-  if (!response) return null;
+  if (!response) {
+    logError('getCallbackEventsStatus', 'Пустой ответ от VK', { groupId, serverId });
+    return null;
+  }
 
-  // VK может возвращать ответ в разной вложенности в зависимости от версии или метода
-  const settings = response.response?.response || response.response || response;
+  // ✅ ИСПРАВЛЕНИЕ: Правильная обработка вложенности
+  let settings = response;
   
+  // Случай 1: response.response.response (двойная вложенность)
+  if (response.response && response.response.response) {
+    settings = response.response.response;
+  }
+  // Случай 2: response.response (одинарная вложенность)
+  else if (response.response) {
+    settings = response.response;
+  }
+  
+  // Проверка, что мы получили объект настроек
   if (!settings || typeof settings !== 'object') {
-    logError('getCallbackEventsStatus', 'Ошибка парсинга настроек', response);
+    logError('getCallbackEventsStatus', 'Неверный формат настроек', {
+      rawResponse: JSON.stringify(response).substring(0, 500),
+      settingsType: typeof settings
+    });
     return null;
   }
   
-  // Список всех критических событий для работы бота
+  // ✅ ЛОГИРОВАНИЕ для отладки
+  logInfo('📊 Raw Callback Settings', {
+    groupId: groupId,
+    serverId: serverId,
+    rawSettings: JSON.stringify(settings).substring(0, 300)
+  });
+  
   const criticalEvents = ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new'];
   
   const status = {
@@ -269,12 +291,19 @@ function getCallbackEventsStatus(groupId, serverId) {
   };
   
   criticalEvents.forEach(event => {
-    // VK возвращает 1 = включено, 0 = выключено
-    if (settings[event] === 1 || settings[event] === '1') {
+    // ✅ Строгая проверка: только числовая 1, строковая '1' или true считаются включенным
+    if (settings[event] === 1 || settings[event] === '1' || settings[event] === true) {
       status.enabled.push(event);
     } else {
       status.disabled.push(event);
     }
+  });
+  
+  logInfo('✅ Parsed Callback Status', {
+    enabled: status.enabled.length,
+    disabled: status.disabled.length,
+    enabledList: status.enabled.join(', '),
+    disabledList: status.disabled.join(', ')
   });
   
   return status;
