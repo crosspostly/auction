@@ -6,7 +6,7 @@ const SHEETS = {
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
-  Incoming: { name: "Входящие", headers: ["date", "type", "group_id", "payload"] },
+  Incoming: { name: "Входящие", headers: ["date", "type", "group_id", "params", "payload"] },
   Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
 };
 
@@ -243,6 +243,7 @@ function logIncomingRaw(data, rawPayload) {
       date: new Date(),
       type: data.type || "unknown",
       group_id: data.group_id || "",
+      params: data.params || "",
       payload: rawPayload
     });
 

@@ -238,6 +238,108 @@ function setupCallbackServerAutomatic(url) {
   return { serverId, code, secret };
 }
 
+/**
+ * ✅ ПРАВИЛЬНАЯ ПРОВЕРКА СОСТОЯНИЯ СОБЫТИЙ
+ * Возвращает реальное состояние с сервера VK
+ */
+function getCallbackEventsStatus(groupId, serverId) {
+  const adminToken = getVkToken(true);
+  const response = callVk('groups.getCallbackSettings', {
+    group_id: groupId,
+    server_id: serverId
+  }, adminToken);
+  
+  if (!response) return null;
+
+  // VK может возвращать ответ в разной вложенности в зависимости от версии или метода
+  const settings = response.response?.response || response.response || response;
+  
+  if (!settings || typeof settings !== 'object') {
+    logError('getCallbackEventsStatus', 'Ошибка парсинга настроек', response);
+    return null;
+  }
+  
+  // Список всех критических событий для работы бота
+  const criticalEvents = ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new'];
+  
+  const status = {
+    enabled: [],
+    disabled: [],
+    raw: settings
+  };
+  
+  criticalEvents.forEach(event => {
+    // VK возвращает 1 = включено, 0 = выключено
+    if (settings[event] === 1 || settings[event] === '1') {
+      status.enabled.push(event);
+    } else {
+      status.disabled.push(event);
+    }
+  });
+  
+  return status;
+}
+
+/**
+ * ✅ УМНОЕ ВКЛЮЧЕНИЕ СОБЫТИЙ (без дублирования)
+ * Включает только те события, которые реально выключены
+ */
+function enableCallbackEvents(groupId, serverId, eventsToEnable) {
+  if (!Array.isArray(eventsToEnable) || eventsToEnable.length === 0) {
+    return { success: false, message: 'Пустой список событий' };
+  }
+  
+  // 1. Получаем текущее состояние
+  const currentStatus = getCallbackEventsStatus(groupId, serverId);
+  
+  if (!currentStatus) {
+    return { success: false, message: 'Ошибка получения текущего состояния' };
+  }
+  
+  // 2. Фильтруем: включаем только те, что реально выключены
+  const reallyDisabled = eventsToEnable.filter(event => 
+    !currentStatus.enabled.includes(event)
+  );
+  
+  if (reallyDisabled.length === 0) {
+    return { 
+      success: true, 
+      message: 'Все события уже активны',
+      enabled: eventsToEnable
+    };
+  }
+  
+  // 3. Подготавливаем payload только для выключенных событий
+  const payload = {
+    group_id: groupId,
+    server_id: serverId
+  };
+  
+  // Включаем ВСЕ запрошенные события (VK позволяет слать все сразу)
+  eventsToEnable.forEach(event => {
+    payload[event] = '1';
+  });
+  
+  // 4. Отправляем запрос
+  const response = callVk('groups.setCallbackSettings', payload, getVkToken(true));
+  
+  if (response && (response.response === 1 || response === 1)) {
+    logInfo('✅ События успешно обновлены', reallyDisabled);
+    return { 
+      success: true, 
+      enabled: eventsToEnable,
+      message: `Настройки событий обновлены`
+    };
+  } else {
+    logError('enableCallbackEvents', 'Ошибка VK API', response);
+    return { 
+      success: false, 
+      error: response,
+      message: 'Ошибка при сохранении настроек в VK'
+    };
+  }
+}
+
 function sendMessage(userId, message) { 
   const result = callVk("messages.send", { 
     user_id: String(userId), 

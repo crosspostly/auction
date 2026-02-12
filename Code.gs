@@ -47,8 +47,13 @@ function doPost(e) {
     const rawPayload = e.postData.contents;
     const data = JSON.parse(rawPayload);
 
-    // 1. Логируем входящее событие в сыром виде (новое требование)
-    logIncomingRaw(data, rawPayload);
+    // 1. Логируем входящее событие расширенно
+    const logData = {
+      type: data.type || "unknown",
+      group_id: data.group_id || "",
+      params: e.parameter ? JSON.stringify(e.parameter) : "none"
+    };
+    logIncomingRaw(logData, rawPayload);
 
     // Детальный лог только в режиме отладки
     logDebug('📨 doPost called', {
@@ -326,46 +331,23 @@ function checkVkCallbackServer() {
         serverInfo.push(`Статус: ${myServer.status}`);
         serverInfo.push(`Title: ${myServer.title}`);
         
-        // Проверяем настройки событий
-        const settings = callVk('groups.getCallbackSettings', { 
-          group_id: groupId, 
-          server_id: myServer.id 
-        });
+        // Используем новую надежную функцию для проверки статуса
+        const status = getCallbackEventsStatus(groupId, myServer.id);
         
-        if (settings && settings.response) {
+        if (status) {
           serverInfo.push(`\n=== НАСТРОЙКИ СОБЫТИЙ ===`);
-          const events = [
-            'wall_post_new',
-            'wall_reply_new', 
-            'message_new'
-          ];
-          
-          // VK может возвращать ответ в разной вложенности
-          const respData = settings.response.response || settings.response;
+          const events = ['wall_post_new', 'wall_reply_new', 'message_new'];
           
           events.forEach(event => {
-            const enabled = respData[event] === 1 ? '✅ ВКЛ' : '❌ ВЫКЛ';
-            serverInfo.push(`${event}: ${enabled}`);
+            const isEnabled = status.enabled.includes(event);
+            serverInfo.push(`${event}: ${isEnabled ? '✅ ВКЛ' : '❌ ВЫКЛ'}`);
           });
           
-          // Если события выключены - включаем их
-          const disabledEvents = events.filter(event => respData[event] !== 1);
-          if (disabledEvents.length > 0) {
+          // Если что-то выключено - включаем
+          if (status.disabled.some(e => ['wall_post_new', 'wall_reply_new', 'message_new'].includes(e))) {
             serverInfo.push(`\n🔧 ВКЛЮЧАЕМ СОБЫТИЯ...`);
-            
-            const enableResult = callVk('groups.setCallbackSettings', {
-              group_id: groupId,
-              server_id: myServer.id,
-              wall_post_new: 1,
-              wall_reply_new: 1,
-              message_new: 1
-            });
-            
-            if (enableResult && (enableResult.response === 1 || enableResult === 1)) {
-              serverInfo.push(`✅ Все события успешно включены!`);
-            } else {
-              serverInfo.push(`❌ Ошибка включения событий: ${JSON.stringify(enableResult)}`);
-            }
+            const res = enableCallbackEvents(groupId, myServer.id, ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new']);
+            serverInfo.push(res.success ? '✅ Успешно включены' : '❌ Ошибка: ' + res.message);
           }
         }
       } else {
