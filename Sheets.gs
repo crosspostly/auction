@@ -229,8 +229,9 @@ function log(type, message, details) {
 
 function logInfo(msg, det) { log("ИНФО", msg, det); }
 function logDebug(msg, det) {
-  const debug = getSetting('DEBUG_VK_API');
-  if (debug === true || debug === 'TRUE') {
+  // getSetting доступна глобально из Code.gs
+  const debugEnabled = getSetting('debug_logging_enabled'); 
+  if (debugEnabled === true || debugEnabled === 'ВКЛ') {
     log("ОТЛАДКА", msg, det);
   }
 }

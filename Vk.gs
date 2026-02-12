@@ -16,8 +16,8 @@ const VK_EVENTS = {
 
 // ✅ ПРАВИЛЬНАЯ ФУНКЦИЯ VK API С ПОЛНЫМ ЛОГИРОВАНИЕМ И РЕТРАЯМИ
 function callVk(method, params, token = null, retryCount = 0) {
-  const debug = getSetting('DEBUG_VK_API');
-  const debugMode = (debug === true || debug === 'TRUE');
+  const debugEnabled = getSetting('debug_logging_enabled'); // Использование единой настройки из таблицы
+  const debugMode = (debugEnabled === true || debugEnabled === 'ВКЛ');
   const authToken = token || getSetting('VK_TOKEN');
 
   if (!authToken) {

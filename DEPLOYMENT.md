@@ -91,17 +91,19 @@
 
 ### Шаг 5: Публикация веб-приложения
 
-1. В редакторе Apps Script нажмите **Развернуть** → **Новое развертывание**
-2. Нажмите на иконку шестерёнки ⚙️ → выберите **Веб-приложение**
-3. Настройки:
-   - **Описание**: VK Auction Bot v1.0
-   - **Запускать как**: Я (ваш email)
-   - **У кого есть доступ**: Все (обязательно для Webhook и CI/CD)
-4. Нажмите **Развернуть**
-5. **Скопируйте URL веб-приложения** - он выглядит так:
-   ```
-   https://script.google.com/macros/s/xxxxx.../exec
-   ```
+1. В редакторе Apps Script нажмите **Развернуть** → **Управление развертываниями**
+2. Выберите существующее развертывание с ID: `AKfycbz5QY9W2VUdF_xdafv_DH6yDpdPEN1zsEUF6wSEqOQvwueBgMWWAsze4fmNRFEJkryY`
+3. Нажмите иконку карандаша ✏️ (Редактировать)
+4. Выберите **Новая версия**
+5. Нажмите **Развернуть**
+
+**ВАЖНО**: Для этого проекта используется фиксированный URL, к которому привязан прокси:
+`https://script.google.com/macros/s/AKfycbz5QY9W2VUdF_xdafv_DH6yDpdPEN1zsEUF6wSEqOQvwueBgMWWAsze4fmNRFEJkryY/exec`
+
+При использовании `clasp` всегда деплойте в этот ID:
+```bash
+npx clasp deploy -i AKfycbz5QY9W2VUdF_xdafv_DH6yDpdPEN1zsEUF6wSEqOQvwueBgMWWAsze4fmNRFEJkryY -d "Описание версии"
+```
 
 ### Шаг 6: Завершение настройки Callback API
 

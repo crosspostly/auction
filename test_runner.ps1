@@ -3,7 +3,7 @@
 
 param(
     [string]$Action = "run_tests",
-    [string]$WebAppUrl = "https://script.google.com/macros/s/AKfycbx1E8xzjP1vwNFq_XzLr_xymJvom2fh_7_qT6wgfn1XqQtOmCFjHaVYGs9hIXtMEb0/exec",
+    [string]$WebAppUrl = "https://script.google.com/macros/s/AKfycbz5QY9W2VUdF_xdafv_DH6yDpdPEN1zsEUF6wSEqOQvwueBgMWWAsze4fmNRFEJkryY/exec",
     [string]$Secret = "5f574d3f-2f39-4f",
     [string]$ArtifactsDir = "./artifacts"
 )

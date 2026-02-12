@@ -5,7 +5,7 @@ set -euo pipefail
 #  CONFIG
 # ================================
 # Можно переопределить через переменные окружения.
-WEB_APP_URL="${WEB_APP_URL:-https://script.google.com/macros/s/AKfycbx1E8xzjP1vwNFq_XzLr_xymJvom2fh_7_qT6wgfn1XqQtOmCFjHaVYGs9hIXtMEb0/exec}"
+WEB_APP_URL="${WEB_APP_URL:-https://script.google.com/macros/s/AKfycbz5QY9W2VUdF_xdafv_DH6yDpdPEN1zsEUF6wSEqOQvwueBgMWWAsze4fmNRFEJkryY/exec}"
 SECRET="${VK_SECRET:-5f574d3f-2f39-4f}"
 
 # Максимальное число попыток в одном запуске скрипта

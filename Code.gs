@@ -1782,10 +1782,6 @@ function cleanupOldStats() {
 // Вспомогательная функция для тестового фреймворка
 function getSetting(key) {
   const settings = getSettings();
-  if (key === 'DEBUG_VK_API') {
-    const debugProp = PropertiesService.getScriptProperties().getProperty('DEBUG_VK_API');
-    return debugProp === 'TRUE' || debugProp === true;
-  }
   return settings[key];
 }
 
