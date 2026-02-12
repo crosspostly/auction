@@ -1,4 +1,32 @@
 function doGet(e) {
+  // 1. Обработка запроса на запуск тестов (CI/CD)
+  if (e.parameter && e.parameter.action === 'run_tests') {
+    const secret = PropertiesService.getScriptProperties().getProperty('VK_SECRET');
+    // Если секрет еще не задан в свойствах, разрешаем запуск с дефолтным (для первого старта), но лучше требовать совпадение.
+    // Если e.parameter.secret совпадает с VK_SECRET
+    if (secret && e.parameter.secret === secret) {
+      try {
+        logInfo("🚀 Запуск тестов через веб-хук (CI/CD)...");
+        const result = runFullCycleSimulation();
+        // Проверяем результат симуляции. Если он содержит маркеры ошибки,
+        // возвращаем ошибку, чтобы CI/CD скрипт мог ее поймать.
+        if (result.includes("FAILED") || result.includes("❌")) {
+          logError("CI_CD_TEST_REPORTED_FAILURE", { result });
+          // Возвращаем сам результат, так как он уже содержит детали ошибки.
+          return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n" + result).setMimeType(ContentService.MimeType.TEXT);
+        }
+        // В случае успеха, возвращаем стандартное сообщение.
+        return ContentService.createTextOutput("✅ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО:\n" + result).setMimeType(ContentService.MimeType.TEXT);
+      } catch (error) {
+        logError("CI_CD_TEST_FAILED", error);
+        return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n" + error.message + "\n\nStack:\n" + error.stack).setMimeType(ContentService.MimeType.TEXT);
+      }
+    } else {
+      return ContentService.createTextOutput("⛔ Доступ запрещен. Неверный secret.").setMimeType(ContentService.MimeType.TEXT);
+    }
+  }
+
+  // 2. Стандартная проверка доступности
   // Этот тест - главный способ проверить, что скрипт развернут правильно.
   // Откройте URL веб-приложения в режиме инкогнито.
   // Если вы видите этот текст - значит, URL рабочий и доступ есть у всех ("Anyone").
@@ -64,6 +92,7 @@ function onOpen() {
       .addItem('🔄 Сбросить триггеры', 'setupTriggers'))
     .addSubMenu(ui.createMenu('🔬 ТЕСТЫ')
       .addItem('🧪 Запустить все интеграционные тесты', 'runAllIntegrationTests')
+      .addItem('🚀 Полная симуляция (Real API)', 'runFullCycleSimulation')
       .addItem('🔑 Проверить права токенов (Full)', 'testFullPermissions'))
     .addSubMenu(ui.createMenu('🔧 СЕРВИС')
       .addItem('⚙️ Проверить и исправить настройки', 'checkAndFixSettings')
@@ -232,65 +261,118 @@ function routeEvent(payload) {
   }
 }
 
+/**
+ * Builds a complete order summary message for a given user.
+ * This function is reusable for both direct user communication and admin reports.
+ * @param {string} userId - The VK user ID.
+ * @returns {string} A formatted string containing the user's order summary.
+ */
+function buildUserOrderSummary(userId) {
+  const settings = getSettings();
+  const allOrders = getSheetData("Orders");
+  const userOrders = allOrders.filter(o => String(o.data.user_id) === String(userId) && o.data.status === 'unpaid');
+
+  if (userOrders.length === 0) {
+    return "У вас нет неоплаченных выигранных лотов.";
+  }
+
+  let lotsList = '';
+  let lotsTotal = 0;
+  userOrders.forEach(order => {
+    // Добавим ссылку на пост с лотом для удобства
+    const postLink = order.data.post_id ? ` (https://vk.com/wall${order.data.post_id})` : '';
+    lotsList += `- Лот "${order.data.lot_name}"${postLink} - ${order.data.win_price}₽\n`;
+    lotsTotal += Number(order.data.win_price);
+  });
+
+  const itemCount = userOrders.length;
+  const deliveryRules = settings.delivery_rules || {};
+  let deliveryCost = 0;
+
+  if (itemCount > 0) {
+    if (itemCount <= 3 && deliveryRules['1-3']) deliveryCost = deliveryRules['1-3'];
+    else if (itemCount <= 6 && deliveryRules['4-6']) deliveryCost = deliveryRules['4-6'];
+    else if (deliveryRules['7+']) deliveryCost = deliveryRules['7+'];
+    else deliveryCost = 0;
+  }
+  
+  const totalCost = lotsTotal + deliveryCost;
+
+  let template = settings.order_summary_template || "Ошибка: шаблон не найден.";
+  const messageText = template
+      .replace('{LOTS_LIST}', lotsList)
+      .replace('{LOTS_TOTAL}', lotsTotal)
+      .replace('{ITEM_COUNT}', itemCount)
+      .replace('{DELIVERY_COST}', deliveryCost)
+      .replace('{TOTAL_COST}', totalCost)
+      .replace('{PAYMENT_BANK}', settings.PAYMENT_BANK || '')
+      .replace('{PAYMENT_PHONE}', settings.PAYMENT_PHONE || '');
+  
+  return messageText;
+}
+
 function handleMessageNew(payload) {
     const settings = getSettings();
     const codeWord = (settings.CODE_WORD || 'Аукцион').toLowerCase();
     const message = payload.object.message;
-    const text = (message.text || '').toLowerCase();
+    const text = (message.text || '');
+    const lowerCaseText = text.toLowerCase();
     const userId = String(message.from_id);
 
-    if (text !== codeWord) {
-        logDebug("handleMessageNew: Ignored message, no code word.", {text: message.text});
-        return;
+    // Если сообщение содержит кодовое слово, запускаем стандартную логику сводки по заказу.
+    if (lowerCaseText === codeWord) {
+        logInfo("handleMessageNew: Code word received.", {userId: userId, text: message.text});
+        const summaryMessage = buildUserOrderSummary(userId);
+        sendMessage(userId, summaryMessage);
+        
+        // Логируем только если сводка действительно была отправлена
+        if (!summaryMessage.startsWith("У вас нет")) {
+          Monitoring.recordEvent('USER_SUMMARY_SENT', { userId: userId });
+        }
+        return; // Завершаем выполнение, так как это была команда
     }
 
-    logInfo("handleMessageNew: Code word received.", {userId: userId, text: message.text});
-
-    // 1. Find user and their unpaid orders
+    // Если кодового слова нет, пытаемся распознать данные для доставки.
     const allOrders = getSheetData("Orders");
-    const userOrders = allOrders.filter(o => String(o.data.user_id) === userId && o.data.status === 'unpaid');
-
-    if (userOrders.length === 0) {
-        sendMessage(userId, "У вас нет неоплаченных выигранных лотов.");
+    const userHasUnpaidOrders = allOrders.some(o => String(o.data.user_id) === userId && o.data.status === 'unpaid');
+    
+    if (!userHasUnpaidOrders) {
+        logDebug("handleMessageNew: Ignored message, no code word and no unpaid orders.", {text: text});
         return;
     }
 
-    // 2. Prepare data for the template
-    let lotsList = '';
-    let lotsTotal = 0;
-    userOrders.forEach(order => {
-        lotsList += `- Лот "${order.data.lot_name}" - ${order.data.win_price}₽\n`;
-        lotsTotal += Number(order.data.win_price);
-    });
+    const phoneRegex = /(?:\+7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/;
+    const fioRegex = /([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)/;
 
-    const itemCount = userOrders.length;
-    const deliveryRules = settings.delivery_rules || {};
-    let deliveryCost = 0;
+    const phoneMatch = text.match(phoneRegex);
+    const fioMatch = text.match(fioRegex);
 
-    // Simplified delivery cost logic
-    if (itemCount > 0) {
-        if (itemCount <= 3 && deliveryRules['1-3']) deliveryCost = deliveryRules['1-3'];
-        else if (itemCount <= 6 && deliveryRules['4-6']) deliveryCost = deliveryRules['4-6'];
-        else if (deliveryRules['7+']) deliveryCost = deliveryRules['7+'];
-        else deliveryCost = 0; // Default or error case
+    const addressKeywords = ['г.', 'ул.', 'д.', 'кв.', 'индекс', 'сдэк', 'cdek', 'почта'];
+    const hasAddressHint = addressKeywords.some(kw => lowerCaseText.includes(kw));
+
+    if (phoneMatch || fioMatch || hasAddressHint) {
+        logInfo("handleMessageNew: Shipping info detected.", {userId: userId, text: text});
+        
+        const phone = phoneMatch ? phoneMatch[0] : 'не найден';
+        const fio = fioMatch ? fioMatch[0] : 'не найдено';
+        
+        const address = text.replace(phoneRegex, '').replace(fioRegex, '').replace(/\s+/g, ' ').trim();
+
+        const shippingDetails = `ФИО: ${fio}\nТелефон: ${phone}\nАдрес: ${address}`;
+
+        const allUsers = getSheetData("Users");
+        const userRow = allUsers.find(u => String(u.data.user_id) === userId);
+
+        if (userRow) {
+            updateRow("Users", userRow.rowIndex, { shipping_details: shippingDetails });
+            sendMessage(userId, '✅ Спасибо, данные для доставки приняты!');
+            Monitoring.recordEvent('SHIPPING_INFO_RECEIVED', { userId: userId, details: shippingDetails });
+        } else {
+            logError('handleMessageNew', new Error('Could not find user to save shipping info'), {userId: userId});
+        }
+    } else {
+        logDebug("handleMessageNew: Ignored message, no code word and no shipping info detected.", {text: text});
     }
-    
-    const totalCost = lotsTotal + deliveryCost;
-
-    // 3. Fill the template
-    let template = settings.order_summary_template || "Ошибка: шаблон не найден.";
-    const messageText = template
-        .replace('{LOTS_LIST}', lotsList)
-        .replace('{LOTS_TOTAL}', lotsTotal)
-        .replace('{ITEM_COUNT}', itemCount)
-        .replace('{DELIVERY_COST}', deliveryCost)
-        .replace('{TOTAL_COST}', totalCost)
-        .replace('{PAYMENT_BANK}', settings.PAYMENT_BANK || '')
-        .replace('{PAYMENT_PHONE}', settings.PAYMENT_PHONE || '');
-
-    // 4. Send the message
-    sendMessage(userId, messageText);
-    Monitoring.recordEvent('USER_SUMMARY_SENT', { userId: userId, total_cost: totalCost });
 }
 
 function handleWallPostNew(payload) {
@@ -404,7 +486,24 @@ function parseDeadline(text) {
 }
 function handleWallReplyNew(payload) {
   const comment = payload.object || {};
+  
+  // Enhanced debug log at the very start
+  logInfo('🎤 handleWallReplyNew received', {
+    from_id: comment.from_id,
+    text: comment.text,
+    post_id: comment.post_id,
+    owner_id: comment.owner_id
+  });
+
   const postKey = `${comment.owner_id}_${comment.post_id}`;
+  
+  // ADDED: Detailed initial log
+  Monitoring.recordEvent('HANDLE_WALL_REPLY_NEW_START', { 
+    comment_id: comment.id, 
+    text: comment.text, 
+    postKey: postKey, 
+    from_id: comment.from_id 
+  });
   
   logDebug(`🔍 START handleWallReplyNew`, { 
     comment_id: comment.id, 
@@ -418,19 +517,20 @@ function handleWallReplyNew(payload) {
   const fromId = String(comment.from_id);
   
   if (fromId === `-${groupId}`) {
-    const text = (comment.text || "").trim();
-    const isStrictBid = /^\d+(?:\s*₽)?$/.test(text);
+    const bidAmount = parseBid(comment.text || "");
     
-    if (!isStrictBid) {
-      logDebug("🚫 Ignored self-reply (text)", { text: text });
+    if (!bidAmount) {
+      logDebug("🚫 Ignored self-reply (not a bid)", { text: comment.text });
       return; 
     }
-    logDebug("✅ Accepted self-reply (strict bid)", { text: text });
+    logDebug("✅ Accepted self-reply (parsed as bid)", { text: comment.text, bid: bidAmount });
   }
   // ----------------------------------------------------
 
   const lot = findLotByPostId(postKey);
   if (!lot) {
+    // ADDED: Detailed log for lot not found
+    Monitoring.recordEvent('HANDLE_WALL_REPLY_LOT_NOT_FOUND', { postKey: postKey, text: comment.text });
     logInfo("❌ Lot NOT FOUND for postKey", { postKey: postKey });
     // Попробуем найти лот по частичному совпадению (иногда post_id бывает без owner_id)
     const cleanPostId = String(comment.post_id);
@@ -444,6 +544,7 @@ function handleWallReplyNew(payload) {
   }
 
   if (lot.status !== "active") {
+    Monitoring.recordEvent('HANDLE_WALL_REPLY_LOT_INACTIVE', { lot_id: lot.lot_id, status: lot.status });
     logInfo("⚠️ Lot found but NOT ACTIVE", { status: lot.status, lot_id: lot.lot_id });
     return;
   }
@@ -452,10 +553,13 @@ function handleWallReplyNew(payload) {
   const userId = String(comment.from_id);
   
   if (!bid) {
+    Monitoring.recordEvent('HANDLE_WALL_REPLY_NO_BID_PARSED', { text: comment.text });
     logDebug("⚠️ Comment text parsed as NO BID", { text: comment.text });
     return;
   }
 
+  // ADDED: Log parsed bid
+  Monitoring.recordEvent('HANDLE_WALL_REPLY_BID_PARSED', { lot_id: lot.lot_id, bid: bid, user_id: userId });
   logDebug(`✅ Bid parsed: ${bid}`, { lot_id: lot.lot_id, current_price: lot.current_price });
 
   const lock = LockService.getScriptLock();
@@ -467,6 +571,13 @@ function handleWallReplyNew(payload) {
     const validationResult = enhancedValidateBid(bid, currentLot, userId);
     
     if (!validationResult.isValid) {
+      // ADDED: Detailed log for invalid bid
+      Monitoring.recordEvent('HANDLE_WALL_REPLY_BID_INVALID', { 
+        lot_id: currentLot.lot_id, 
+        bid: bid, 
+        user_id: userId, 
+        reason: validationResult.reason 
+      });
       logDebug(`🚫 Bid INVALID: ${validationResult.reason}`, { bid: bid, lot_id: currentLot.lot_id });
       
       // Записываем любую некорректную ставку в таблицу для истории
@@ -859,49 +970,33 @@ function sendAdminReport(winners) {
     return;
   }
 
-  const winnersGroupedByUser = winners.reduce((acc, winner) => {
-    if (!acc[winner.winner_id]) {
-      acc[winner.winner_id] = {
-        name: winner.winner_name,
-        lots: []
-      };
-    }
-    acc[winner.winner_id].lots.push({
-      lot_id: winner.lot_id,
-      name: winner.name,
-      price: winner.price,
-      attachment_id: winner.attachment_id
+  // Находим уникальных победителей
+  const uniqueWinnerIds = [...new Set(winners.map(w => w.winner_id))];
+
+  // Для каждого уникального победителя формируем и отправляем отдельное сообщение
+  uniqueWinnerIds.forEach(winnerId => {
+    const userSummary = buildUserOrderSummary(winnerId);
+    
+    // Пропускаем, если у пользователя почему-то нет неоплаченных лотов (например, уже оплатил)
+    if (userSummary.startsWith("У вас нет")) return;
+
+    // Получаем имя пользователя (предполагается, что где-то есть функция getUserName)
+    const winnerName = getUserName(winnerId); 
+    const adminHeader = `⬇️ Сообщение для [id${winnerId}|${winnerName}] (готово к пересылке) ⬇️`;
+    const finalMessageForAdmin = `${adminHeader}\n\n${userSummary}`;
+
+    // Отправляем это персональное сообщение каждому администратору
+    adminIds.forEach(adminId => {
+      try {
+        sendMessage(adminId, finalMessageForAdmin);
+      } catch (e) {
+        logError('sendAdminReport_send_failed', e, { adminId: adminId, winnerId: winnerId });
+      }
     });
-    return acc;
-  }, {});
-
-  let summaryMessage = `🏁 *Отчет о завершении аукциона от ${new Date().toLocaleString()}* 🏁\n\n`;
-  if (Object.keys(winnersGroupedByUser).length === 0) {
-    summaryMessage += "К сожалению, в этом аукционе победителей нет.\n";
-  } else {
-    for (const userId in winnersGroupedByUser) {
-      const winner = winnersGroupedByUser[userId];
-      summaryMessage += `👤 *${winner.name}* ([id${userId}|${winner.name}])\n`;
-      winner.lots.forEach(lot => {
-        summaryMessage += `  - Лот №${lot.lot_id}: «${lot.name}» - *${lot.price}₽*\n`;
-      });
-      summaryMessage += "\n";
-    }
-  }
-  summaryMessage += "----------------------------------------\n";
-  summaryMessage += `Общее количество проданных лотов: ${winners.length}\n`;
-  summaryMessage += `Общая сумма продаж: ${winners.reduce((sum, w) => sum + w.price, 0)}₽\n`;
-
-  adminIds.forEach(adminId => {
-    try {
-      const firstAttachment = winners.length > 0 ? winners[0].attachment_id : null;
-      sendMessage(adminId, summaryMessage, firstAttachment);
-      logInfo(`Отчет администратору ${adminId} отправлен.`);
-    } catch (e) {
-      logError('sendAdminReport_send_failed', e, { adminId: adminId });
-    }
+    logInfo(`Отчет по победителю ${winnerId} отправлен администраторам.`);
   });
-  Monitoring.recordEvent('ADMIN_REPORT_SENT', { recipient_ids: adminIds, report_summary: summaryMessage.substring(0, 200) });
+
+  Monitoring.recordEvent('ADMIN_REPORTS_SENT', { recipient_ids: adminIds, winner_count: uniqueWinnerIds.length });
 }
       function setupSheets() { Object.keys(SHEETS).forEach(name => getSheet(name)); }
 /**
@@ -1283,7 +1378,7 @@ function systemHealthCheck() {
  */
 function checkRequiredSheets() {
   try {
-    const requiredSheets = ['Config', 'Bids', 'Winners', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs', 'Winners'];
     const missingSheets = [];
     
     for (const sheetKey of requiredSheets) {
@@ -1690,36 +1785,48 @@ function enqueueEvent(payload) {
  * Processes events from the EventQueue.
  * This function is triggered every minute by a time-based trigger.
  */
-function processEventQueue() {
+function processEventQueue(L) {
+  if (!L) L = (msg, data) => logDebug(msg, data); // Fallback to default logger
+
   const rows = getSheetData("EventQueue");
+  L(`[DEBUG] processEventQueue started. Found ${rows.length} total rows.`);
   let processed = 0;
   
   for (const row of rows) {
-    if (processed >= 50) break; // Увеличили до 50 за один проход
+    if (processed >= 50) {
+      L(`[DEBUG] Hit processing limit of 50.`);
+      break;
+    }
     
-    // Делаем проверку регистра-независимой и убираем пробелы
+    const eventId = row.data.eventId || 'no_id';
     const currentStatus = String(row.data.status || "").toLowerCase().trim();
-    if (currentStatus !== "pending") continue;
+    L(`[DEBUG] Row ${row.rowIndex}: ID=${eventId}, Status='${currentStatus}'.`);
+
+    if (currentStatus !== "pending") {
+      continue;
+    }
     
+    L(`[DEBUG] Processing row ${row.rowIndex}...`);
     try {
       const payload = JSON.parse(row.data.payload);
+      L(`[DEBUG] Routing event type: ${payload.type}`);
       routeEvent(payload);
       
-      // Update status to processed
       updateRow("EventQueue", row.rowIndex, { 
         status: "processed", 
-        receivedAt: row.data.receivedAt // Keep original timestamp
+        receivedAt: row.data.receivedAt
       });
       
       processed++;
+      L(`[DEBUG] Row ${row.rowIndex} successfully processed.`);
       Monitoring.recordEvent('EVENT_PROCESSED', { eventId: row.data.eventId, eventType: payload.type });
     } catch (error) {
       logError('processEventQueue', error, row.data.payload);
-      // Update status to failed
       updateRow("EventQueue", row.rowIndex, { 
         status: "failed", 
         receivedAt: row.data.receivedAt 
       });
+      L(`[DEBUG] Row ${row.rowIndex} failed to process: ${error.message}`);
       Monitoring.recordEvent('EVENT_PROCESSING_FAILED', { 
         eventId: row.data.eventId, 
         error: error.message,

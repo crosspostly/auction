@@ -16,53 +16,39 @@ const DEFAULT_SETTINGS = {
   min_bid_increment: 50,
   max_bid: 1000000,
   delivery_rules: JSON.stringify({ "1-3": 450, "4-6": 550, "7+": 650 }),
-  order_summary_template: "Добрый день!
+  order_summary_template: `Добрый день!
 
-" +
-    "Ваши выигранные лоты:
+Ваши выигранные лоты:
 {LOTS_LIST}
 
-" +
-    "Сумма за лоты: {LOTS_TOTAL}₽
-" +
-    "Доставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽
-" +
-    "━━━━━━━━━━━━━━━━━━━
-" +
-    "ИТОГО К ОПЛАТЕ: {TOTAL_COST}₽
+Сумма за лоты: {LOTS_TOTAL}₽
+Доставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽
+━━━━━━━━━━━━━━━━━━━
+ИТОГО К ОПЛАТЕ: {TOTAL_COST}₽
 
-" +
-    "Для оформления отправки пришлите:
-" +
-    "1. ФИО полностью
-" +
-    "2. Город и адрес (или СДЭК/Почта России)
-" +
-    "3. Номер телефона
-" +
-    "4. Скриншот оплаты
+Для оформления отправки пришлите:
+1. ФИО полностью
+2. Город и адрес (или СДЭК/Почта России)
+3. Номер телефона
+4. Скриншот оплаты
 
-" +
-    "💳 Реквизиты для оплаты:
-" +
-    "{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}
+💳 Реквизиты для оплаты:
+{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}
 
-" +
-    "📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
-" +
-    "Напишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.",
-  outbid_notification_template: "🔔 Ваша ставка перебита!
+📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
+Напишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.`,
+  outbid_notification_template: `🔔 Ваша ставка перебита!
 Лот: {lot_name}
 Новая ставка: {new_bid}₽
-https://vk.com/wall{post_id}",
-  low_bid_notification_template: "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉
-https://vk.com/wall{post_id}",
-  winner_notification_template: "🎉 Выиграли лот {lot_name} за {price}₽!
-Напишите "АУКЦИОН".",
-  subscription_required_template: "👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢",
-  invalid_step_template: "👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨",
-  max_bid_exceeded_template: "Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉",
-  auction_finished_template: "Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!"
+https://vk.com/wall{post_id}`,
+  low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉
+https://vk.com/wall{post_id}`,
+  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!
+Напишите "АУКЦИОН".`,
+  subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
+  invalid_step_template: `👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨`,
+  max_bid_exceeded_template: `Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉`,
+  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`
 };
 
 const TOGGLE_SETTINGS = {
@@ -76,7 +62,7 @@ const SETTINGS_DESCRIPTIONS = {
   bid_step: "Размер шага ставки (например, 50 руб)",
   min_bid_increment: "Минимальная надбавка к текущей цене",
   max_bid: "Максимально допустимая ставка (защита от опечаток)",
-  delivery_rules: "Правила доставки (JSON). Формат: "кол-во":цена",
+  delivery_rules: 'Правила доставки (JSON). Формат: "кол-во":цена',
   order_summary_template: "Шаблон сообщения победителю с деталями заказа",
   outbid_notification_template: "Шаблон уведомления о перебитой ставке",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
@@ -132,14 +118,39 @@ function ensureHeaders(sheet, headers) {
 }
 
 function getSheetData(sheetKey) {
+  const cacheKey = 'sheet_' + sheetKey;
+  
+  // Determine if running interactively (user clicking in UI) vs. automatically (trigger, webapp)
+  let isInteractive = false;
+  try {
+    // This call fails if there's no user interface, indicating an automatic execution
+    if (ScriptApp.getUi()) isInteractive = true;
+  } catch (e) {
+    isInteractive = false;
+  }
+  
+  // ONLY use cache for interactive sessions to speed up UI
+  if (isInteractive) {
+    const cached = CacheService.getScriptCache().get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  }
+
   const sheet = getSheet(sheetKey);
   const values = sheet.getDataRange().getValues();
   if (values.length < 2) return [];
   const headers = values[0];
-  return values.slice(1).map((row, index) => ({
+  const data = values.slice(1).map((row, index) => ({
     rowIndex: index + 2,
     data: headers.reduce((acc, header, idx) => { acc[header] = row[idx]; return acc; }, {})
   }));
+
+  if (isInteractive) {
+    CacheService.getScriptCache().put(cacheKey, JSON.stringify(data), 120); // Cache for 2 minutes
+  }
+
+  return data;
 }
 
 function appendRow(sheetKey, rowData) {
@@ -147,6 +158,8 @@ function appendRow(sheetKey, rowData) {
   const headers = SHEETS[sheetKey].headers;
   const row = headers.map(h => rowData[h] !== undefined ? rowData[h] : "");
   sheet.appendRow(row);
+  SpreadsheetApp.flush(); // Force the sheet to update immediately
+  CacheService.getScriptCache().remove('sheet_' + sheetKey); // Always clear cache on write
 }
 
 function updateRow(sheetKey, rowIndex, rowData) {
@@ -163,6 +176,7 @@ function updateRow(sheetKey, rowIndex, rowData) {
   });
   
   range.setValues([updatedRow]);
+  CacheService.getScriptCache().remove('sheet_' + sheetKey); // Always clear cache on write
 }
 
 function log(type, message, details) {
@@ -196,10 +210,21 @@ function toggleSystemSheets(hide) {
 }
 
 function upsertLot(lot) {
-  const rows = getSheetData("Config");
+  const sheetKey = "Config";
+  const rows = getSheetData(sheetKey);
   const existing = rows.find(r => String(r.data.lot_id) === String(lot.lot_id));
-  if (existing) updateRow("Config", existing.rowIndex, lot);
-  else appendRow("Config", lot);
+  
+  Monitoring.recordEvent('UPSERT_LOT_ATTEMPT', { 
+    lot_id: lot.lot_id, 
+    exists: !!existing, 
+    sheetKey: sheetKey 
+  });
+
+  if (existing) {
+    updateRow(sheetKey, existing.rowIndex, lot);
+  } else {
+    appendRow(sheetKey, lot);
+  }
 }
 
 function findLotByPostId(postId) {

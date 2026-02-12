@@ -549,14 +549,23 @@ function testEventQueueProcessing() {
       group_id: 1234567
     });
     
-    appendRow("EventQueue", {
-      eventId: Utilities.getUuid(), payload: testEventPayload,
-      status: "pending", receivedAt: new Date()
-    });
+        appendRow("EventQueue", {
     
-    processEventQueue();
+          eventId: Utilities.getUuid(), payload: testEventPayload,
     
-    const lots = getSheetData("Config");
+          status: "pending", receivedAt: new Date()
+    
+        });
+    
+        
+    
+        processEventQueue();
+    
+        Utilities.sleep(5000);
+    
+        
+    
+        const lots = getSheetData("Config");
     const queueTestLot = lots.find(l => l.data.lot_id === "QUEUE_TEST_001");
     
     if (!queueTestLot) {

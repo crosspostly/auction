@@ -121,6 +121,7 @@ function runMockTest() {
 function forceRun() {
   Logger.log("Forcing Process Event Queue...");
   processEventQueue();
+  Utilities.sleep(5000);
   Logger.log("Forcing Process Notification Queue...");
   processNotificationQueue();
   Logger.log("Done.");
@@ -148,7 +149,7 @@ function forceClearAllQueues() {
     Logger.log(`Разгребаем пачку... Осталось: ${pending.length}`);
     processEventQueue();
     totalProcessed += 10;
-    Utilities.sleep(500); 
+    Utilities.sleep(5000); 
   }
   
   processNotificationQueue();

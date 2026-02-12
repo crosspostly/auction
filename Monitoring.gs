@@ -1,24 +1,35 @@
 /**
- * @fileoverview Monitoring script for recording events and statistics.
+ * @fileoverview Глобальный объект мониторинга.
+ * Используем именованную функцию для гарантии инициализации (hoisting).
  */
-
-const MONITORING_SETTINGS = {
-  sheetName: 'Статистика',
-  header: ['Timestamp', 'EventType', 'Data']
-};
 
 /**
- * Records an event to the monitoring sheet.
- * @param {string} eventType - The type of event (e.g., 'SIMULATOR_START', 'BID_PLACED').
- * @param {object} data - A JSON object with event details.
+ * Записывает событие в лист "Статистика"
+ * @param {string} type Тип события
+ * @param {object|string} data Данные события
  */
-function recordEvent(eventType, data) {
+function recordMonitoringEvent(type, data) {
   try {
-    const sheet = getSheet(MONITORING_SETTINGS.sheetName, MONITORING_SETTINGS.header);
-    const timestamp = new Date();
-    const dataString = JSON.stringify(data);
-    sheet.appendRow([timestamp, eventType, dataString]);
+    // Параметры листа
+    var sheetName = 'Статистика';
+    var header = ['Timestamp', 'EventType', 'Data'];
+    
+    // Получаем лист (функция getSheet находится в Sheets.gs)
+    if (typeof getSheet !== 'function') return;
+    
+    var sheet = getSheet(sheetName, header);
+    var timestamp = new Date();
+    var dataString = (typeof data === 'object') ? JSON.stringify(data) : String(data);
+    
+    sheet.appendRow([timestamp, type, dataString]);
   } catch (e) {
-    Logger.log(`Failed to record event: ${e.message}`);
+    console.error('Monitoring Error: ' + e.message);
   }
 }
+
+// Создаем глобальный объект-обертку для совместимости с существующим кодом
+var Monitoring = {
+  recordEvent: function(type, data) {
+    recordMonitoringEvent(type, data);
+  }
+};

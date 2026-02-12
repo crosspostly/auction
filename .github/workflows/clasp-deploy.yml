@@ -131,6 +131,17 @@ jobs:
           fi
         shell: bash
 
+      - name: 🚀 Deploy new version
+        id: deploy
+        if: steps.push.outputs.success == 'true'
+        run: |
+          cd src
+          echo "🚀 Deploying new version..."
+          DEPLOYMENT_ID=$(clasp deploy --description "Automated deployment from commit ${{ github.sha }}" | grep -oP '^.*- \K.*' | head -n 1)
+          echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
+          echo "✅ New version deployed!"
+        shell: bash
+
       - name: 📊 Deployment Summary
         if: always()
         run: |
@@ -141,6 +152,7 @@ jobs:
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit Message**: ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Author**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment ID**: ${{ env.DEPLOYMENT_ID }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.push.outputs.success }}" = "true" ]; then
