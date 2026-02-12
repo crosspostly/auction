@@ -1624,11 +1624,6 @@ function processAdminReplies() {
     // 3. Filter messages from admins that are replies
     // 4. Process payment commands
     
-    Monitoring.recordEvent('ADMIN_REPLY_POLLING', {
-      timestamp: new Date(),
-      status: 'placeholder' // Change when implemented
-    });
-    
   } catch (error) {
     logError('processAdminReplies', error);
     Monitoring.recordEvent('ADMIN_REPLY_POLLING_ERROR', {

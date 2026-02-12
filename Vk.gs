@@ -257,20 +257,17 @@ function getCallbackEventsStatus(groupId, serverId) {
   // ✅ ИСПРАВЛЕНИЕ: Правильная обработка вложенности
   let settings = response;
   
-  // Случай 1: response.response.response (двойная вложенность)
-  if (response.response && response.response.response) {
-    settings = response.response.response;
-  }
-  // Случай 2: response.response (одинарная вложенность)
-  else if (response.response) {
+  if (response.response) {
     settings = response.response;
   }
   
+  // В новых версиях API (5.199+) события лежат в поле 'events'
+  const eventData = settings.events || settings;
+  
   // Проверка, что мы получили объект настроек
-  if (!settings || typeof settings !== 'object') {
+  if (!eventData || typeof eventData !== 'object') {
     logError('getCallbackEventsStatus', 'Неверный формат настроек', {
-      rawResponse: JSON.stringify(response).substring(0, 500),
-      settingsType: typeof settings
+      rawResponse: JSON.stringify(response).substring(0, 500)
     });
     return null;
   }
@@ -279,7 +276,7 @@ function getCallbackEventsStatus(groupId, serverId) {
   logInfo('📊 Raw Callback Settings', {
     groupId: groupId,
     serverId: serverId,
-    rawSettings: JSON.stringify(settings).substring(0, 300)
+    rawSettings: JSON.stringify(eventData).substring(0, 300)
   });
   
   const criticalEvents = ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new'];
@@ -287,12 +284,12 @@ function getCallbackEventsStatus(groupId, serverId) {
   const status = {
     enabled: [],
     disabled: [],
-    raw: settings
+    raw: eventData
   };
   
   criticalEvents.forEach(event => {
-    // ✅ Строгая проверка: только числовая 1, строковая '1' или true считаются включенным
-    if (settings[event] === 1 || settings[event] === '1' || settings[event] === true) {
+    // Проверяем наличие флага именно в данных событий
+    if (eventData[event] === 1 || eventData[event] === '1' || eventData[event] === true) {
       status.enabled.push(event);
     } else {
       status.disabled.push(event);
