@@ -264,9 +264,16 @@ function getCallbackEventsStatus(groupId, serverId) {
   // В новых версиях API (5.199+) события лежат в поле 'events'
   const eventData = settings.events || settings;
   
-  // Проверка, что мы получили объект настроек
-  if (!eventData || typeof eventData !== 'object') {
-    logError('getCallbackEventsStatus', 'Неверный формат настроек', {
+  const criticalEvents = ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new'];
+
+  // ✅ Проверяем, что eventData действительно содержит настройки событий
+  const hasEventFields = criticalEvents.some(event => 
+    eventData.hasOwnProperty(event)
+  );
+
+  if (!hasEventFields) {
+    logError('getCallbackEventsStatus', 'В ответе VK нет полей событий', {
+      availableKeys: Object.keys(eventData).join(', '),
       rawResponse: JSON.stringify(response).substring(0, 500)
     });
     return null;
@@ -278,8 +285,6 @@ function getCallbackEventsStatus(groupId, serverId) {
     serverId: serverId,
     rawSettings: JSON.stringify(eventData).substring(0, 300)
   });
-  
-  const criticalEvents = ['wall_post_new', 'wall_reply_new', 'wall_reply_edit', 'wall_reply_delete', 'message_new'];
   
   const status = {
     enabled: [],

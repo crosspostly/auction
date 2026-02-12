@@ -392,6 +392,92 @@ function checkVkCallbackServer() {
     ui.alert('❌ Ошибка проверки Callback сервера: ' + e.message);
   }
 }
+
+/**
+ * Глубокая диагностика настроек Callback (вывод в лог)
+ */
+function debugCallbackSettings() {
+  const groupId = getVkGroupId();
+  const webAppUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL');
+  
+  logInfo('🔍 Запуск глубокой диагностики Callback Settings', { groupId, webAppUrl });
+  
+  // Получаем список серверов
+  const servers = callVk('groups.getCallbackServers', { group_id: groupId });
+  
+  if (!servers || !servers.response || !servers.response.items) {
+    logError('debugCallbackSettings', 'Не удалось получить список серверов', servers);
+    return;
+  }
+  
+  const myServer = servers.response.items.find(s => s.url === webAppUrl);
+  
+  if (!myServer) {
+    logError('debugCallbackSettings', 'Наш сервер не найден в списке VK!');
+    return;
+  }
+  
+  logInfo(`✅ Сервер найден. ID: ${myServer.id}, Статус: ${myServer.status}`);
+  
+  // ПРЯМОЙ запрос настроек БЕЗ обёртки
+  const rawResponse = callVk('groups.getCallbackSettings', {
+    group_id: groupId,
+    server_id: myServer.id
+  }, getVkToken(true));
+  
+  logInfo('📦 RAW RESPONSE (getCallbackSettings):', rawResponse);
+  
+  // Теперь через нашу функцию
+  const parsed = getCallbackEventsStatus(groupId, myServer.id);
+  
+  if (parsed) {
+    logInfo('✅ Парсинг успешен', {
+      enabled: parsed.enabled.join(', '),
+      disabled: parsed.disabled.join(', ')
+    });
+  } else {
+    logError('debugCallbackSettings', 'getCallbackEventsStatus вернула null');
+  }
+}
+
+/**
+ * Верификация исправления Callback API
+ */
+function verifyCallbackFix() {
+  const groupId = getVkGroupId();
+  const servers = callVk('groups.getCallbackServers', { group_id: groupId });
+  
+  if (!servers?.response?.items?.length) {
+    Logger.log('❌ Нет серверов');
+    return;
+  }
+  
+  const myServer = servers.response.items[0];
+  
+  // Проверяем парсинг
+  const status = getCallbackEventsStatus(groupId, myServer.id);
+  
+  if (!status) {
+    Logger.log('❌ getCallbackEventsStatus вернула null');
+    return;
+  }
+  
+  Logger.log('✅ УСПЕХ! Состояние получено:');
+  Logger.log(`   Включено: ${status.enabled.length} событий`);
+  Logger.log(`   Выключено: ${status.disabled.length} событий`);
+  Logger.log(`   Список включенных: ${status.enabled.join(', ')}`);
+  
+  // Проверяем, что критичные события включены
+  const mustHave = ['wall_post_new', 'wall_reply_new', 'message_new'];
+  const missing = mustHave.filter(e => !status.enabled.includes(e));
+  
+  if (missing.length > 0) {
+    Logger.log(`⚠️ ВНИМАНИЕ! Не включены: ${missing.join(', ')}`);
+  } else {
+    Logger.log('✅ Все критичные события включены');
+  }
+}
+
 function routeEvent(payload) {
   // Process the event (already recorded in enqueueEvent)
   switch (payload.type) {
