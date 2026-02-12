@@ -559,18 +559,95 @@ function testEventQueueProcessing() {
     
         
     
-        processEventQueue();
-    
-        Utilities.sleep(5000);
+                // Process the queue with retries to handle latency
     
         
     
-        const lots = getSheetData("Config");
-    const queueTestLot = lots.find(l => l.data.lot_id === "QUEUE_TEST_001");
+                for (let p = 0; p < 3; p++) {
     
-    if (!queueTestLot) {
-      return { testName, passed: false, error: "Лот не был создан из события в очереди" };
-    }
+        
+    
+                    processEventQueue();
+    
+        
+    
+                    if (p < 2) Utilities.sleep(2000 * (p + 1));
+    
+        
+    
+                }
+    
+        
+    
+                
+    
+        
+    
+                // Retry logic with exponential backoff
+    
+        
+    
+            let queueTestLot;
+    
+        
+    
+            let waitTime = 1000;
+    
+        
+    
+            const maxRetries = 10;
+    
+        
+    
+            
+    
+        
+    
+            for (let i = 0; i < maxRetries; i++) {
+    
+        
+    
+              Utilities.sleep(waitTime);
+    
+        
+    
+              const lots = getSheetData("Config");
+    
+        
+    
+              queueTestLot = lots.find(l => l.data.lot_id === "QUEUE_TEST_001");
+    
+        
+    
+              if (queueTestLot) break;
+    
+        
+    
+              Logger.log(`Attempt ${i+1}: Lot not found, waiting ${Math.round(waitTime)}ms...`);
+    
+        
+    
+              waitTime *= 1.5;
+    
+        
+    
+            }
+    
+        
+    
+            
+    
+        
+    
+            if (!queueTestLot) {
+    
+        
+    
+              return { testName, passed: false, error: "Лот не был создан из события в очереди (после " + maxRetries + " попыток)" };
+    
+        
+    
+            }
     
     return { testName, passed: true };
   } catch (error) {

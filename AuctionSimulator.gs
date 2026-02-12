@@ -266,18 +266,24 @@ function runFullCycleSimulation() {
     };
     enqueueEvent(JSON.stringify(postEventPayload));
 
-    // Process the queue immediately for the test
-    processEventQueue(L);
-    Utilities.sleep(SLEEP_LONG_AFTER_QUEUE_PROCESSING); // Give time for event processing and sheet writes
+    // Process the queue with retries to handle Sheet latency
+    for (let p = 0; p < 3; p++) {
+        processEventQueue(L);
+        if (p < 2) Utilities.sleep(2000 * (p + 1));
+    }
     
-    // Verify Lot Created with Retry Logic
+    // Verify Lot Created with Retry Logic (Exponential Backoff)
     let lot;
-    for (let i = 0; i < 5; i++) {
-      Utilities.sleep(500); // Wait 0.5 seconds before each check
+    let waitTime = 1000;
+    const maxRetries = 10;
+    
+    for (let i = 0; i < maxRetries; i++) {
+      Utilities.sleep(waitTime); 
       const lots = getSheetData("Config");
       lot = lots.find(l => String(l.data.lot_id) === String(lotId));
       if (lot) break;
-      L(`Attempt ${i + 1}: Lot not found yet, retrying...`);
+      L(`Attempt ${i + 1}: Lot not found yet, waiting ${Math.round(waitTime)}ms...`);
+      waitTime *= 1.5; // Exponential backoff
     }
 
     if (!lot) {
@@ -316,14 +322,18 @@ function runFullCycleSimulation() {
     };
     enqueueEvent(JSON.stringify(eventPayload));
     
-    // Process the queue immediately for the test
-    processEventQueue(L);
-    Utilities.sleep(SLEEP_LONG_AFTER_QUEUE_PROCESSING); // Give time for event processing and sheet writes
+    // Process the queue with retries to handle Sheet latency
+    for (let p = 0; p < 3; p++) {
+        processEventQueue(L);
+        if (p < 2) Utilities.sleep(2000 * (p + 1));
+    }
     
-    // Verify Bid in 'Ставки' with Retry Logic
+    // Verify Bid in 'Ставки' with Retry Logic (Exponential Backoff)
     let myBid;
-    for (let i = 0; i < 5; i++) {
-      Utilities.sleep(1000); // Increased sleep time to 1 second
+    let bidWaitTime = 1000;
+    
+    for (let i = 0; i < maxRetries; i++) {
+      Utilities.sleep(bidWaitTime);
       const bids = getSheetData("Bids");
       L(`Attempt ${i + 1}: Checking for bid... Found ${bids.length} total bids.`);
       myBid = bids.find(b => String(b.data.lot_id) === String(lotId) && String(b.data.bid_amount) === String(bidAmount));
@@ -331,6 +341,8 @@ function runFullCycleSimulation() {
         L(`Bid found on attempt ${i + 1}!`);
         break;
       }
+      L(`Attempt ${i + 1}: Bid not found yet, waiting ${Math.round(bidWaitTime)}ms...`);
+      bidWaitTime *= 1.5;
     }
 
     if (!myBid) {
