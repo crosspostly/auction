@@ -113,11 +113,19 @@ function getSpreadsheet() {
 
 function getSheet(sheetKey) {
   const config = SHEETS[sheetKey];
+  if (!config) {
+    throw new Error(`Лист с ключом "${sheetKey}" не определен в конфигурации SHEETS.`);
+  }
   const ss = getSpreadsheet();
   let sheet = ss.getSheetByName(config.name);
   if (!sheet) {
-    sheet = ss.insertSheet(config.name);
-    ensureHeaders(sheet, config.headers);
+    try {
+      sheet = ss.insertSheet(config.name);
+      ensureHeaders(sheet, config.headers);
+      logInfo(`Создан новый лист: ${config.name}`);
+    } catch (e) {
+      throw new Error(`Не удалось создать лист "${config.name}": ${e.message}`);
+    }
   }
   return sheet;
 }
@@ -261,11 +269,13 @@ function logIncomingRaw(data, rawPayload) {
 }
 
 function toggleSystemSheets(hide) {
-  const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs"];
+  const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs", "Incoming"];
   const ss = getSpreadsheet();
   systemKeys.forEach(key => {
-    const sheet = ss.getSheetByName(SHEETS[key].name);
-    if (sheet) hide ? sheet.hideSheet() : sheet.showSheet();
+    if (SHEETS[key]) {
+      const sheet = ss.getSheetByName(SHEETS[key].name);
+      if (sheet) hide ? sheet.hideSheet() : sheet.showSheet();
+    }
   });
 }
 
