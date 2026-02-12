@@ -1,19 +1,2 @@
-❌ ОШИБКА ТЕСТОВ:
-FAILED:
-[10.12.59] 🔄 Resetting all triggers before simulation... 
-[10.13.04] ✅ Triggers reset. 
-[10.13.04] 🚀 Starting Full Cycle Simulation... 
-[10.13.04] Step 1.0: Validating USER_TOKEN... 
-[10.13.04] ✅ USER_TOKEN is valid. Test user identified {"userId":"1053779509"}
-[10.13.04] Step 1.1: Creating Lot Post... 
-[10.13.05] Lot posted {"lotId":"SIM_FULL_9c7244","postId":2152}
-[10.13.10] ✅ Lot creation verified 
-[10.13.10] ✅ Lot creation verified 
-[10.13.10] Step 1.2: Placing Bid... 
-[10.13.20] Attempt 1: Checking for bid... Found 7 total bids. 
-[10.13.21] Attempt 2: Checking for bid... Found 7 total bids. 
-[10.13.22] Attempt 3: Checking for bid... Found 7 total bids. 
-[10.13.23] Attempt 4: Checking for bid... Found 7 total bids. 
-[10.13.25] Attempt 5: Checking for bid... Found 7 total bids. 
-[10.13.25] DEBUG: All bids found for this lot in the sheet {"bids":[]}
-[10.13.25] ❌ SIMULATION FAILED {"error":"Bid not found in 'Ставки' sheet","stack":"Error: Bid not found in 'Ставки' sheet\n    at runFullCycleSimulation (AuctionSimulator:336:13)\n    at doGet (Code:10:24)\n    at __GS_INTERNAL_top_function_call__.gs:1:8"}
+✅ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО:
+✅ FULL CYCLE SIMULATION COMPLETED SUCCESSFULLY!

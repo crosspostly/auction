@@ -37,6 +37,23 @@ const DEFAULT_SETTINGS = {
 
 📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
 Напишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.`,
+  lot_post_template: `#аукцион@dndpotustoronu №{LOT_ID}
+При поддержке GABRIGAME-WORKSHOP!
+Дедлайн {DEADLINE} по МСК!
+🎁Лот - на картинке. + миниатюра идет с красивой, текстурной базой.
+
+👀Старт {START_PRICE}р и шаг - {BID_STEP}р.
+Каждая миниатюра аукциона масштабом 32-35мм.
+ПОДАРОК ТОМУ, КТО ЗАБЕРЁТ ЗА ДЕНЬ БОЛЬШЕ ВСЕГО МИНИАТЮР!
+Дата окончания аукциона {DEADLINE_DATE} (суббота) в {DEADLINE_TIME} по Москве.
+
+В случае, если за 10 минут (или меньше) до окончания аукциона делается ставка, например, в 20:59, аукцион на данный лот продлевается на 10 минут - до 21:09. Начиная с 20:50, продление на 10 минут происходит с каждой новой ставкой.
+
+После аукциона пиши ТОЛЬКО в ЛС группы. Опасайся МОШЕННИКОВ пишущих тебе в ЛС. Отправь картинки миниатюр которые выиграл. Напиши Телефон, ФИО, Город, Адрес (пункт СДЭК). И как тебе отправить, Почтой или СДЭКом.
+
+ДОСТАВКА ЗА СЧЁТ ПОБЕДИТЕЛЯ почтой России с отправкой из Волгограда. (До 3 фигурок 450р, дальше уточним). Отправка по четвергам.
+
+Оплата на карту в течение 3 дней после победы.`,
   outbid_notification_template: `🔔 Ваша ставка перебита!
 Лот: {lot_name}
 Новая ставка: {new_bid}₽
@@ -45,15 +62,13 @@ https://vk.com/wall{post_id}`,
 https://vk.com/wall{post_id}`,
   winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!
 Напишите "АУКЦИОН".`,
+  winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы "Аукцион ({date})", чтобы забрать свой лот`,
+  unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
   invalid_step_template: `👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨`,
   max_bid_exceeded_template: `Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉`,
-  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`
-};
-
-const TOGGLE_SETTINGS = {
-  bid_step_enabled: "ВКЛ",
-  require_subscription: "ВЫКЛ"
+  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`,
+  notification_preference: 'comment' // 'comment', 'pm', 'both' - предпочтительный способ уведомлений
 };
 
 const SETTINGS_DESCRIPTIONS = {
@@ -67,14 +82,27 @@ const SETTINGS_DESCRIPTIONS = {
   outbid_notification_template: "Шаблон уведомления о перебитой ставке",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
   winner_notification_template: "Шаблон уведомления победителю",
+  winner_comment_template: "Шаблон комментария о победе с упоминанием пользователя",
+  unsold_lot_comment_template: "Шаблон комментария для не проданного лота",
   subscription_required_template: "Шаблон уведомления о необходимости подписки",
   invalid_step_template: "Шаблон уведомления о некорректном шаге ставки",
   max_bid_exceeded_template: "Шаблон уведомления о превышении максимальной ставки",
   auction_finished_template: "Шаблон уведомления о завершении аукциона",
   bid_step_enabled: "Включить проверку шага ставки (ВКЛ/ВЫКЛ)",
-  require_subscription: "Требовать подписку на группу для участия в аукционе (ВКЛ/ВЫКЛ)"
+  subscription_check_enabled: "Проверять подписку на группу перед приемом ставки (ВКЛ/ВЫКЛ)",
+  debug_logging_enabled: "Включить подробные технические логи (ВКЛ/ВЫКЛ)",
+  reply_on_invalid_bid_enabled: "Отвечать комментарием на некорректные ставки (шаг, цена) (ВКЛ/ВЫКЛ)",
+  send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)"
 };
 
+const TOGGLE_SETTINGS = {
+  bid_step_enabled: "ВКЛ",
+  require_subscription: "ВЫКЛ",
+  subscription_check_enabled: "ВЫКЛ",
+  debug_logging_enabled: "ВЫКЛ",
+  reply_on_invalid_bid_enabled: "ВКЛ",
+  send_winner_dm_enabled: "ВКЛ"
+};
 
 var _ss_cache = null;
 function getSpreadsheet() { 
@@ -201,7 +229,7 @@ function logError(src, err, pay) { log("ОШИБКА", `[${src}] ${err.message |
 function logIncoming(data) { log("ВХОДЯЩИЙ", "Webhook от VK", data); }
 
 function toggleSystemSheets(hide) {
-  const systemKeys = ["Bids", "NotificationQueue", "Logs"];
+  const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs", "Statistics"];
   const ss = getSpreadsheet();
   systemKeys.forEach(key => {
     const sheet = ss.getSheetByName(SHEETS[key].name);
@@ -307,11 +335,28 @@ function createDemoData() {
     settingsSheet.appendRow([key, TOGGLE_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
   });
 
+  // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
+  settingsSheet.appendRow(["--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", ""]);
+  // Добавляем notification_preference в дополнительные настройки
+  if (!keysPresent.has("notification_preference")) {
+    settingsSheet.appendRow(["notification_preference", "comment", SETTINGS_DESCRIPTIONS["notification_preference"]]);
+  }
+
   // --- ШАБЛОНЫ ---
   settingsSheet.appendRow(["--- ШАБЛОНЫ ---", "", ""]);
   const templateSettingsKeys = Object.keys(DEFAULT_SETTINGS).filter(k => k.endsWith('_template'));
   templateSettingsKeys.forEach(key => {
-    settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]]);
+    // Проверяем, есть ли уже такое значение в таблице
+    if (!keysPresent.has(key)) {
+      settingsSheet.appendRow([key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key] || ""]);
+    } else {
+      // Если шаблон содержит ошибку "Ошибка: шаблон не найден", обновляем его
+      const allRows = settingsSheet.getDataRange().getValues();
+      const currentRow = allRows.findIndex(row => row[0] === key);
+      if (currentRow !== -1 && allRows[currentRow][1] === "Ошибка: шаблон не найден.") {
+        settingsSheet.getRange(currentRow + 1, 2).setValue(DEFAULT_SETTINGS[key]); // Обновляем значение
+      }
+    }
   });
   
   applyDropdownValidation(); // Apply dropdowns after creating settings
@@ -368,9 +413,74 @@ function setupConditionalFormatting() {
 
 function queueNotification(n) {
   const rows = getSheetData("NotificationQueue");
-  const existing = rows.find(r => r.data.status === "pending" && String(r.data.user_id) === String(n.user_id) && r.data.type === n.type);
-  if (existing) updateRow("NotificationQueue", existing.rowIndex, { payload: JSON.stringify(n.payload), created_at: new Date() });
-  else appendRow("NotificationQueue", { queue_id: Utilities.getUuid(), user_id: n.user_id, type: n.type, payload: JSON.stringify(n.payload), status: "pending", created_at: new Date() });
+  
+  // Check for existing PENDING notification with same user_id, type, and similar payload
+  let existing = null;
+
+  if (n.type === "outbid" || n.type === "winner") {
+    // For outbid and winner notifications, check if there's already a pending notification for this user and lot
+    existing = rows.find(r =>
+      r.data.status === "pending" &&
+      String(r.data.user_id) === String(n.user_id) &&
+      r.data.type === n.type &&
+      r.data.payload.includes(n.payload.lot_id) // Check if payload contains the same lot_id
+    );
+  } else {
+    // For other types, check user_id and type
+    existing = rows.find(r =>
+      r.data.status === "pending" &&
+      String(r.data.user_id) === String(n.user_id) &&
+      r.data.type === n.type
+    );
+  }
+
+  // If no pending notification exists, also check for recently processed notifications to prevent duplicates
+  if (!existing) {
+    // Check for notifications processed in the last 5 minutes to prevent spam during rapid-fire events
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    
+    const recentDuplicate = rows.find(r =>
+      String(r.data.user_id) === String(n.user_id) &&
+      r.data.type === n.type &&
+      r.data.status !== "pending" && // Already processed notifications
+      new Date(r.data.processed_at || r.data.created_at) > fiveMinutesAgo &&
+      (n.type === "outbid" || n.type === "winner" ? 
+        r.data.payload.includes(n.payload.lot_id) : true) // For outbid/winner, also check lot_id
+    );
+    
+    if (recentDuplicate) {
+      // If we found a recent duplicate, don't send another one
+      Monitoring.recordEvent('DUPLICATE_NOTIFICATION_PREVENTED', {
+        user_id: n.user_id,
+        type: n.type,
+        lot_id: n.payload.lot_id,
+        duplicate_with_queue_id: recentDuplicate.data.queue_id,
+        duplicate_payload: recentDuplicate.data.payload,
+        current_payload: JSON.stringify(n.payload)
+      });
+      return; // Exit early, don't queue the duplicate
+    }
+  }
+
+  if (existing) {
+    // Update existing notification with new payload and timestamp
+    updateRow("NotificationQueue", existing.rowIndex, {
+      payload: JSON.stringify(n.payload),
+      created_at: new Date(),
+      send_after: n.send_after || null // Update send_after if provided
+    });
+  } else {
+    // Add new notification
+    appendRow("NotificationQueue", {
+      queue_id: Utilities.getUuid(),
+      user_id: n.user_id,
+      type: n.type,
+      payload: JSON.stringify(n.payload),
+      status: "pending",
+      created_at: new Date(),
+      send_after: n.send_after || null
+    });
+  }
 }
 
 function updateNotificationStatus(id, status, date) {

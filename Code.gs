@@ -93,7 +93,9 @@ function onOpen() {
     .addSubMenu(ui.createMenu('🔬 ТЕСТЫ')
       .addItem('🧪 Запустить все интеграционные тесты', 'runAllIntegrationTests')
       .addItem('🚀 Полная симуляция (Real API)', 'runFullCycleSimulation')
-      .addItem('🔑 Проверить права токенов (Full)', 'testFullPermissions'))
+      .addItem('🔑 Проверить права токенов (Full)', 'testFullPermissions')
+      .addItem('📋 Тест потока системы', 'runSystemFlowTests')
+      .addItem('🎯 Комплексный тест системы', 'runComprehensiveTest'))
     .addSubMenu(ui.createMenu('🔧 СЕРВИС')
       .addItem('⚙️ Проверить и исправить настройки', 'checkAndFixSettings')
       .addItem('🔍 Проверить функцию валидации', 'testValidateBidFunction')
@@ -295,19 +297,19 @@ function buildUserOrderSummary(userId) {
     else if (deliveryRules['7+']) deliveryCost = deliveryRules['7+'];
     else deliveryCost = 0;
   }
-  
+
   const totalCost = lotsTotal + deliveryCost;
 
   let template = settings.order_summary_template || "Ошибка: шаблон не найден.";
   const messageText = template
-      .replace('{LOTS_LIST}', lotsList)
-      .replace('{LOTS_TOTAL}', lotsTotal)
-      .replace('{ITEM_COUNT}', itemCount)
-      .replace('{DELIVERY_COST}', deliveryCost)
-      .replace('{TOTAL_COST}', totalCost)
-      .replace('{PAYMENT_BANK}', settings.PAYMENT_BANK || '')
-      .replace('{PAYMENT_PHONE}', settings.PAYMENT_PHONE || '');
-  
+      .replace(/{LOTS_LIST}/g, lotsList)
+      .replace(/{LOTS_TOTAL}/g, lotsTotal)
+      .replace(/{ITEM_COUNT}/g, itemCount)
+      .replace(/{DELIVERY_COST}/g, deliveryCost)
+      .replace(/{TOTAL_COST}/g, totalCost)
+      .replace(/{PAYMENT_BANK}/g, settings.PAYMENT_BANK || '')
+      .replace(/{PAYMENT_PHONE}/g, settings.PAYMENT_PHONE || '');
+
   return messageText;
 }
 
@@ -319,12 +321,19 @@ function handleMessageNew(payload) {
     const lowerCaseText = text.toLowerCase();
     const userId = String(message.from_id);
 
+    // Дополнительная проверка: убедимся, что это реальное сообщение от пользователя
+    // а не системное или сгенерированное событие
+    if (!message || !userId || userId === '') {
+        logDebug("handleMessageNew: Ignoring invalid message payload.", {payload: payload});
+        return;
+    }
+
     // Если сообщение содержит кодовое слово, запускаем стандартную логику сводки по заказу.
     if (lowerCaseText === codeWord) {
         logInfo("handleMessageNew: Code word received.", {userId: userId, text: message.text});
         const summaryMessage = buildUserOrderSummary(userId);
         sendMessage(userId, summaryMessage);
-        
+
         // Логируем только если сводка действительно была отправлена
         if (!summaryMessage.startsWith("У вас нет")) {
           Monitoring.recordEvent('USER_SUMMARY_SENT', { userId: userId });
@@ -335,27 +344,52 @@ function handleMessageNew(payload) {
     // Если кодового слова нет, пытаемся распознать данные для доставки.
     const allOrders = getSheetData("Orders");
     const userHasUnpaidOrders = allOrders.some(o => String(o.data.user_id) === userId && o.data.status === 'unpaid');
-    
+
     if (!userHasUnpaidOrders) {
         logDebug("handleMessageNew: Ignored message, no code word and no unpaid orders.", {text: text});
         return;
     }
 
-    const phoneRegex = /(?:\+7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/;
-    const fioRegex = /([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)/;
-
+    // Проверяем, содержит ли сообщение признаки информации для доставки
+    // Улучшаем регулярные выражения для более точного распознавания
+    
+    // Более строгое регулярное выражение для телефона: должно начинаться с +7, 8 или 7 и содержать 10-11 цифр
+    const phoneRegex = /(?:\+7|8|7)[\s\-(]*(?:\d[\s\-)]*){10}(?:\d)?/;
     const phoneMatch = text.match(phoneRegex);
+
+    // Более строгое регулярное выражение для ФИО: должно содержать как минимум 2 слова из 2+ букв, начинающихся с заглавной буквы
+    const fioRegex = /([А-ЯЁ][а-яё]{1,}\s+[А-ЯЁ][а-яё]{1,}(?:\s+[А-ЯЁ][а-яё]{1,})?)/;
     const fioMatch = text.match(fioRegex);
 
-    const addressKeywords = ['г.', 'ул.', 'д.', 'кв.', 'индекс', 'сдэк', 'cdek', 'почта'];
-    const hasAddressHint = addressKeywords.some(kw => lowerCaseText.includes(kw));
+    // Проверяем наличие ключевых слов для адреса, но более строго
+    const addressKeywords = ['город', 'г\\.', 'улица', 'ул\\.', 'дом', 'д\\.', 'квартира', 'кв\\.', 'индекс', 'сдэк', 'cdek', 'почта', 'россии'];
+    const hasAddressHint = addressKeywords.some(kw => new RegExp(kw, 'i').test(lowerCaseText));
 
-    if (phoneMatch || fioMatch || hasAddressHint) {
+    // Улучшаем логику: требуем, чтобы были как минимум 2 из 3 признаков (телефон, ФИО, адрес)
+    // или более точное распознавание, чтобы избежать ложных срабатываний
+    const hasPhone = !!phoneMatch;
+    const hasFio = !!fioMatch;
+    const hasAddress = hasAddressHint;
+
+    // Проверяем, что текст содержит достаточно информации для доставки
+    // Не отправляем сообщение, если пользователь просто написал "аукцион" или короткое сообщение
+    // Также проверяем, что сообщение не является командой "аукцион" (даже с разным регистром)
+    const isCodeWordCommand = lowerCaseText === (settings.CODE_WORD || 'Аукцион').toLowerCase();
+    
+    // Более строгая проверка: требуем наличие как минимум 2 из 3 признаков
+    const isLikelyShippingInfo = !isCodeWordCommand && 
+                                text.trim() !== '' && 
+                                text.length > 10 && // Сообщение должно быть достаточно длинным
+                                ((hasPhone && hasFio) || 
+                                 (hasPhone && hasAddress) || 
+                                 (hasFio && hasAddress));
+
+    if (isLikelyShippingInfo) {
         logInfo("handleMessageNew: Shipping info detected.", {userId: userId, text: text});
-        
+
         const phone = phoneMatch ? phoneMatch[0] : 'не найден';
         const fio = fioMatch ? fioMatch[0] : 'не найдено';
-        
+
         const address = text.replace(phoneRegex, '').replace(fioRegex, '').replace(/\s+/g, ' ').trim();
 
         const shippingDetails = `ФИО: ${fio}\nТелефон: ${phone}\nАдрес: ${address}`;
@@ -371,7 +405,7 @@ function handleMessageNew(payload) {
             logError('handleMessageNew', new Error('Could not find user to save shipping info'), {userId: userId});
         }
     } else {
-        logDebug("handleMessageNew: Ignored message, no code word and no shipping info detected.", {text: text});
+        logDebug("handleMessageNew: Ignored message, no code word and insufficient shipping info detected.", {text: text, hasPhone, hasFio, hasAddress, isCodeWordCommand, isLikelyShippingInfo});
     }
 }
 
@@ -657,25 +691,31 @@ function handleWallReplyNew(payload) {
 
     // 3. Отправляем ответ перебитому пользователю
     // Для тестов симулятора (где пользователь перебивает сам себя) временно отключаем проверку ID
-    // if (oldLeaderBid && String(oldLeaderBid.data.user_id) !== userId) { 
-    if (oldLeaderBid) { 
-      const notification = { user_id: oldLeaderBid.data.user_id, type: "outbid", payload: { lot_id: currentLot.lot_id, lot_name: currentLot.name, new_bid: bid, post_id: postKey } };
-      queueNotification(notification);
-      
-      const outbidCommentMessage = `Ваша ставка перебита! Новая ставка: ${bid}₽`;
-      try {
-        if (oldLeaderBid.data.comment_id) {
-          replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
-          // Помечаем в таблице, что ответ успешно отправлен
-          updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
-          logInfo(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке`);
-        } else {
-          postCommentToLot(parsePostKey(postKey).postId, `[id${oldLeaderBid.data.user_id}|${getUserName(oldLeaderBid.data.user_id)}], ${outbidCommentMessage}`);
-          updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
-          logInfo(`💬 Упомянул пользователя ${oldLeaderBid.data.user_id} о перебитой ставке`);
+    // if (oldLeaderBid && String(oldLeaderBid.data.user_id) !== userId) {
+    if (oldLeaderBid) {
+      // Отправляем уведомление в комментарий (по умолчанию)
+      if (true) { // Всегда отправляем в комментарий как основное уведомление
+        const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid, post_id: postKey });
+        try {
+          if (oldLeaderBid.data.comment_id) {
+            replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
+            // Помечаем в таблице, что ответ успешно отправлен
+            updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
+            logInfo(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке`);
+          } else {
+            postCommentToLot(parsePostKey(postKey).postId, `[id${oldLeaderBid.data.user_id}|${getUserName(oldLeaderBid.data.user_id)}], ${outbidCommentMessage}`);
+            updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
+            logInfo(`💬 Упомянул пользователя ${oldLeaderBid.data.user_id} о перебитой ставке`);
+          }
+        } catch (e) {
+          logError("reply_outbid", e);
         }
-      } catch (e) {
-        logError("reply_outbid", e);
+      }
+      
+      // Отправляем уведомление в ЛС только если включена настройка отправки ЛС победителям
+      if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
+        const notification = { user_id: oldLeaderBid.data.user_id, type: "outbid", payload: { lot_id: currentLot.lot_id, lot_name: currentLot.name, new_bid: bid, post_id: postKey } };
+        queueNotification(notification);
       }
     }
   } finally {
@@ -683,7 +723,8 @@ function handleWallReplyNew(payload) {
   }
 }
 function parseBid(text) {
-  const match = String(text).match(/(?:^|\s)(\d+)(?:\s*₽)?(?:$|\s)/);
+  // Updated to recognize both ruble symbols: '₽' and 'р' (Russian abbreviation)
+  const match = String(text).match(/(?:^|\s)(\d+)(?:\s*(?:₽|р\.?))?(?:$|\s)/i);
   return match ? Number(match[1]) : null;
 }
 function validateBid(bid, lot) {
@@ -735,7 +776,7 @@ function enhancedValidateBid(bid, lot, userId) {
   const settings = getSettings();
   
   // Check if subscription validation is enabled
-  if (getSetting('require_subscription') === 'ВКЛ') {
+  if (getSetting('subscription_check_enabled') === 'ВКЛ') {
     const isSubscribed = checkUserSubscription(userId);
     
     if (!isSubscribed) {
@@ -786,45 +827,109 @@ function sendNotification(queueRow) {
     updateNotificationStatus(queueRow.queue_id, "failed", new Date());
   }
 }
-function buildOutbidMessage(p) { 
+function buildOutbidMessage(p) {
   const settings = getSettings();
-  let template = settings.outbid_notification_template || "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}";
+  const template = settings.outbid_notification_template || "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}";
+  logDebug("buildOutbidMessage: Using template from settings", { 
+    has_setting: !!settings.outbid_notification_template,
+    template_length: template.length,
+    lot_name: p.lot_name,
+    new_bid: p.new_bid
+  });
   return template
-    .replace('{lot_name}', p.lot_name)
-    .replace('{new_bid}', p.new_bid)
-    .replace('{post_id}', p.post_id);
+    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')
+    .replace(/{new_bid}/g, p.new_bid || '0')
+    .replace(/{post_id}/g, p.post_id || '');
 }
 
-function buildWinnerMessage(p) { 
+function buildWinnerMessage(p) {
   const settings = getSettings();
   const props = PropertiesService.getScriptProperties().getProperties();
   const paymentPhone = props.PAYMENT_PHONE || '';
   const paymentBank = props.PAYMENT_BANK || '';
 
-  let template = settings.order_summary_template || "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".";
+  // Use winner-specific template if available, otherwise fall back to order summary template
+  const template = settings.winner_notification_template ||
+                   settings.order_summary_template ||
+                   "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".";
+  
+  logDebug("buildWinnerMessage: Using template from settings", { 
+    has_winner_setting: !!settings.winner_notification_template,
+    has_order_summary_setting: !!settings.order_summary_template,
+    template_length: template.length,
+    lot_name: p.lot_name,
+    price: p.price
+  });
+
   return template
-    .replace('{lot_name}', p.lot_name)
-    .replace('{price}', p.price)
-    .replace('{PAYMENT_BANK}', paymentBank)
-    .replace('{PAYMENT_PHONE}', paymentPhone);
+    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')  // Use global replace and fallback
+    .replace(/{price}/g, p.price || '0')                     // Use global replace and fallback
+    .replace(/{PAYMENT_BANK}/g, paymentBank)
+    .replace(/{PAYMENT_PHONE}/g, paymentPhone);
 }
 
-function buildLowBidMessage(p) { 
+function buildLowBidMessage(p) {
   const settings = getSettings();
-  let template = settings.low_bid_notification_template || "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}";
+  const template = settings.low_bid_notification_template || "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}";
+  
+  logDebug("buildLowBidMessage: Using template from settings", { 
+    has_setting: !!settings.low_bid_notification_template,
+    template_length: template.length,
+    your_bid: p.your_bid,
+    lot_name: p.lot_name,
+    current_bid: p.current_bid
+  });
+  
   return template
-    .replace('{your_bid}', p.your_bid)
-    .replace('{lot_name}', p.lot_name)
-    .replace('{current_bid}', p.current_bid)
-    .replace('{post_id}', p.post_id);
+    .replace(/{your_bid}/g, p.your_bid || '0')
+    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')
+    .replace(/{current_bid}/g, p.current_bid || '0')
+    .replace(/{post_id}/g, p.post_id || '');
 }
 
-function buildSubscriptionRequiredMessage(p) { 
+function buildSubscriptionRequiredMessage(p) {
   const settings = getSettings();
-  let template = settings.subscription_required_template || "📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}";
+  const template = settings.subscription_required_template || "📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}";
+  
+  logDebug("buildSubscriptionRequiredMessage: Using template from settings", { 
+    has_setting: !!settings.subscription_required_template,
+    template_length: template.length,
+    lot_name: p.lot_name
+  });
+  
   return template
-    .replace('{lot_name}', p.lot_name)
-    .replace('{post_id}', p.post_id);
+    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')
+    .replace(/{post_id}/g, p.post_id || '');
+}
+
+function buildWinnerCommentMessage(p) {
+  const settings = getSettings();
+  const template = settings.winner_comment_template || "Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот";
+  
+  logDebug("buildWinnerCommentMessage: Using template from settings", { 
+    has_setting: !!settings.winner_comment_template,
+    template_length: template.length,
+    date: p.date,
+    user_id: p.user_id,
+    user_name: p.user_name
+  });
+  
+  return template
+    .replace(/{date}/g, p.date || '')
+    .replace(/{user_id}/g, p.user_id || '')
+    .replace(/{user_name}/g, p.user_name || '');
+}
+
+function buildUnsoldLotCommentMessage() {
+  const settings = getSettings();
+  const template = settings.unsold_lot_comment_template || "❌ Лот не продан";
+  
+  logDebug("buildUnsoldLotCommentMessage: Using template from settings", { 
+    has_setting: !!settings.unsold_lot_comment_template,
+    template_length: template.length
+  });
+  
+  return template;
 }
 
 /**
@@ -869,7 +974,7 @@ function finalizeAuction() {
     
     if (!lot.leader_id) {
       updateLot(lot.lot_id, { status: "unsold" });
-      postCommentToLot(postId, "❌ Лот не продан");
+      postCommentToLot(postId, buildUnsoldLotCommentMessage());
       Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
     } else {
       const winnerId = String(lot.leader_id);
@@ -911,28 +1016,45 @@ function finalizeAuction() {
       
       updateLot(lot.lot_id, { status: "sold" });
 
-      const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
-      queueNotification(notification);
+      // Отправляем уведомление победителю в ЛС только если включена настройка отправки ЛС победителям
+      if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
+        const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
+        queueNotification(notification);
+      }
 
       const bidsForWinner = getSheetData("Bids").filter(b => b.data.lot_id === lot.lot_id && b.data.user_id === lot.leader_id);
       if (bidsForWinner.length > 0) {
-        const latestBid = bidsForWinner.reduce((latest, current) => 
+        const latestBid = bidsForWinner.reduce((latest, current) =>
           new Date(current.data.timestamp) > new Date(latest.data.timestamp) ? current : latest
         );
         if (latestBid && latestBid.data.comment_id) {
           const today = new Date();
           const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-          const winnerComment = `Поздравляем с победой в аукционе за миниатюру! Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`;
+          const winnerComment = buildWinnerCommentMessage({
+            date: formattedDate,
+            user_id: lot.leader_id,
+            user_name: getUserName(lot.leader_id)
+          });
           replyToComment(postId, latestBid.data.comment_id, winnerComment);
         } else {
           const today = new Date();
           const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-          postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+          const winnerComment = buildWinnerCommentMessage({
+            date: formattedDate,
+            user_id: lot.leader_id,
+            user_name: getUserName(lot.leader_id)
+          });
+          postCommentToLot(postId, winnerComment);
         }
       } else {
         const today = new Date();
         const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
-        postCommentToLot(postId, `Поздравляем с победой в аукционе за миниатюру! [id${lot.leader_id}|${getUserName(lot.leader_id)}] Напишите в сообщения группы "Аукцион (${formattedDate})", чтобы забрать свой лот`);
+        const winnerComment = buildWinnerCommentMessage({
+          date: formattedDate,
+          user_id: lot.leader_id,
+          user_name: getUserName(lot.leader_id)
+        });
+        postCommentToLot(postId, winnerComment);
       }
 
       allWinnersDataForReport.push({ 
@@ -959,11 +1081,22 @@ function finalizeAuction() {
  */
 function sendAdminReport(winners) {
   const settings = getSettings();
-  const adminIdsString = settings.ADMIN_IDS;
-  if (!adminIdsString || adminIdsString.trim() === "") {
+  let adminIdsValue = settings.ADMIN_IDS;
+  
+  // Проверяем, что adminIdsValue существует и преобразуем к строке
+  if (!adminIdsValue) {
     logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны в настройках.");
     return;
   }
+  
+  // Преобразуем к строке, если это не строка
+  const adminIdsString = String(adminIdsValue);
+  
+  if (adminIdsString.trim() === "") {
+    logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты.");
+    return;
+  }
+  
   const adminIds = adminIdsString.split(',').map(id => id.trim()).filter(id => id);
   if (adminIds.length === 0) {
     logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
@@ -1276,7 +1409,6 @@ function continuousMonitoring() {
     const stats = {
       lotsCount: getSheetData("Config").length,
       bidsCount: getSheetData("Bids").length,
-      winnersCount: getSheetData("Winners").length,
       eventsPending: getSheetData("EventQueue").filter(e => e.data.status === "pending").length,
       notificationsPending: getSheetData("NotificationQueue").filter(n => n.data.status === "pending").length,
       timestamp: new Date()
@@ -1330,19 +1462,19 @@ function systemHealthCheck() {
   try {
     // Check 1: Verify all required sheets exist
     results.push(checkRequiredSheets());
-    
+
     // Check 2: Verify all required triggers are active
     results.push(checkRequiredTriggers());
-    
+
     // Check 3: Check for stuck events in EventQueue
     results.push(checkStuckEvents());
-    
+
     // Check 4: Check for stuck notifications in NotificationQueue
     results.push(checkStuckNotifications());
-    
+
     // Check 5: Verify settings are properly configured
     results.push(checkSettingsConfiguration());
-    
+
     // Check 6: Check for recent errors in logs
     results.push(checkRecentErrors());
     
@@ -1378,7 +1510,7 @@ function systemHealthCheck() {
  */
 function checkRequiredSheets() {
   try {
-    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs', 'Winners'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
     const missingSheets = [];
     
     for (const sheetKey of requiredSheets) {
@@ -1480,41 +1612,8 @@ function recreateMissingTriggers(missingTriggers) {
  * Checks for stuck events in EventQueue
  */
 function checkStuckEvents() {
-  try {
-    const rows = getSheetData("EventQueue");
-    const now = new Date();
-    const stuckEvents = [];
-    
-    for (const row of rows) {
-      if (row.data.status === "pending") {
-        // Check if the event has been pending for more than 10 minutes
-        const receivedTime = new Date(row.data.receivedAt);
-        const timeDiff = (now - receivedTime) / (1000 * 60); // Difference in minutes
-        
-        if (timeDiff > 10) {
-          stuckEvents.push({
-            eventId: row.data.eventId,
-            receivedAt: row.data.receivedAt,
-            timePending: timeDiff
-          });
-        }
-      }
-    }
-    
-    if (stuckEvents.length > 0) {
-      return { 
-        testName: 'Проверка застрявших событий', 
-        passed: false, 
-        error: `Найдено ${stuckEvents.length} застрявших событий`,
-        action: 'cleanupStuckEvents',
-        data: stuckEvents
-      };
-    }
-    
-    return { testName: 'Проверка застрявших событий', passed: true };
-  } catch (error) {
-    return { testName: 'Проверка застрявших событий', passed: false, error: error.message };
-  }
+  // EventQueue has been removed, so skip this check
+  return { testName: 'Проверка застрявших событий', passed: true };
 }
 
 /**

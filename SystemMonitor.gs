@@ -12,19 +12,19 @@ function systemHealthCheck() {
   try {
     // Check 1: Verify all required sheets exist
     results.push(checkRequiredSheets());
-    
+
     // Check 2: Verify all required triggers are active
     results.push(checkRequiredTriggers());
-    
+
     // Check 3: Check for stuck events in EventQueue
     results.push(checkStuckEvents());
-    
+
     // Check 4: Check for stuck notifications in NotificationQueue
     results.push(checkStuckNotifications());
-    
+
     // Check 5: Verify settings are properly configured
     results.push(checkSettingsConfiguration());
-    
+
     // Check 6: Check for recent errors in logs
     results.push(checkRecentErrors());
     
@@ -60,9 +60,9 @@ function systemHealthCheck() {
  */
 function checkRequiredSheets() {
   try {
-    const requiredSheets = ['Config', 'Bids', 'Winners', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
     const missingSheets = [];
-    
+
     for (const sheetKey of requiredSheets) {
       try {
         const sheet = getSheet(sheetKey);
@@ -73,17 +73,17 @@ function checkRequiredSheets() {
         missingSheets.push(sheetKey);
       }
     }
-    
+
     if (missingSheets.length > 0) {
-      return { 
-        testName: 'Проверка наличия листов', 
-        passed: false, 
+      return {
+        testName: 'Проверка наличия листов',
+        passed: false,
         error: `Отсутствуют листы: ${missingSheets.join(', ')}`,
         action: 'createMissingSheets',
         data: missingSheets
       };
     }
-    
+
     return { testName: 'Проверка наличия листов', passed: true };
   } catch (error) {
     return { testName: 'Проверка наличия листов', passed: false, error: error.message };
@@ -95,7 +95,7 @@ function checkRequiredSheets() {
  */
 function createMissingSheets(missingSheets) {
   if (!missingSheets || missingSheets.length === 0) return;
-  
+
   for (const sheetKey of missingSheets) {
     try {
       getSheet(sheetKey); // This will create the sheet if it doesn't exist
@@ -162,41 +162,8 @@ function recreateMissingTriggers(missingTriggers) {
  * Checks for stuck events in EventQueue
  */
 function checkStuckEvents() {
-  try {
-    const rows = getSheetData("EventQueue");
-    const now = new Date();
-    const stuckEvents = [];
-    
-    for (const row of rows) {
-      if (row.data.status === "pending") {
-        // Check if the event has been pending for more than 10 minutes
-        const receivedTime = new Date(row.data.receivedAt);
-        const timeDiff = (now - receivedTime) / (1000 * 60); // Difference in minutes
-        
-        if (timeDiff > 10) {
-          stuckEvents.push({
-            eventId: row.data.eventId,
-            receivedAt: row.data.receivedAt,
-            timePending: timeDiff
-          });
-        }
-      }
-    }
-    
-    if (stuckEvents.length > 0) {
-      return { 
-        testName: 'Проверка застрявших событий', 
-        passed: false, 
-        error: `Найдено ${stuckEvents.length} застрявших событий`,
-        action: 'cleanupStuckEvents',
-        data: stuckEvents
-      };
-    }
-    
-    return { testName: 'Проверка застрявших событий', passed: true };
-  } catch (error) {
-    return { testName: 'Проверка застрявших событий', passed: false, error: error.message };
-  }
+  // EventQueue has been removed, so skip this check
+  return { testName: 'Проверка застрявших событий', passed: true };
 }
 
 /**

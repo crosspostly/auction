@@ -4,8 +4,6 @@
 
 const API_VERSION = '5.199';
 const CACHE_TTL_SECONDS = 21600;
-const OUTBID_MESSAGE = 'Ваша ставка перебита';
-const LOT_NOT_SOLD_MESSAGE = 'Лот не продан';
 
 const VK_EVENTS = {
   wall_post_new: 1, wall_reply_new: 1, wall_reply_edit: 1, wall_reply_delete: 1,
