@@ -871,7 +871,8 @@ function testNotificationQueueProcessing() {
       testLog("Notification found in queue", { user_id: testUserId });
       
       // Process notification
-      processNotification(notification);
+      sendNotification(notification.data);
+      updateNotificationStatus(notification.data.queue_id, "processed", new Date());
       
       // Verify notification is marked as processed
       const processedNotification = getSheetData("NotificationQueue").find(n => n.data.user_id === testUserId);

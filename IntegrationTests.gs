@@ -121,7 +121,12 @@ function testLotCreation() {
 Тестовое описание лота.`;
     
     // Parse the lot
-    const parsedLot = parseLotFromPost(testPostText);
+    const parsedLot = parseLotFromPost({
+      id: 9999,
+      owner_id: -123456789,
+      text: testPostText,
+      attachments: []
+    });
     
     if (!parsedLot) {
       return { testName, passed: false, error: "Не удалось распарсить лот" };
