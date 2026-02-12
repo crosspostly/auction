@@ -10,18 +10,12 @@
  */
 function recordMonitoringEvent(type, data) {
   try {
-    // Параметры листа
-    var sheetName = 'Статистика';
-    var header = ['Timestamp', 'EventType', 'Data'];
-    
-    // Получаем лист (функция getSheet находится в Sheets.gs)
-    if (typeof getSheet !== 'function') return;
-    
-    var sheet = getSheet(sheetName, header);
+    // Записываем в лист Журнал вместо Статистики
     var timestamp = new Date();
     var dataString = (typeof data === 'object') ? JSON.stringify(data) : String(data);
     
-    sheet.appendRow([timestamp, type, dataString]);
+    // Используем существующую функцию log для записи в Журнал
+    log("MONITORING", type, dataString);
   } catch (e) {
     console.error('Monitoring Error: ' + e.message);
   }

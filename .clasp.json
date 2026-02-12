@@ -1,1 +1,16 @@
-{"scriptId":"1q5ujbcYJwSBNtD780FEBR00lS7wZkOnBJryyGvNgBVdGXoSdnz79LnDk"}
+{
+  "scriptId": "1q5ujbcYJwSBNtD780FEBR00lS7wZkOnBJryyGvNgBVdGXoSdnz79LnDk",
+  "rootDir": "",
+  "projectId": "1q5ujbcYJwSBNtD780FEBR00lS7wZkOnBJryyGvNgBVdGXoSdnz79LnDk",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": []
+}

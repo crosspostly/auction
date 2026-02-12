@@ -4,7 +4,6 @@ const SHEETS = {
   Users: { name: "Пользователи", headers: ["user_id", "user_name", "first_win_date", "last_win_date", "total_lots_won", "total_lots_paid", "shipping_status", "shipping_details"] },
   Orders: { name: "Заказы", headers: ["order_id", "lot_id", "lot_name", "post_id", "user_id", "win_date", "win_price", "status", "shipping_batch_id"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
-  Statistics: { name: "Статистика", headers: ["Timestamp", "EventType", "Details"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
   Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
@@ -37,6 +36,7 @@ const DEFAULT_SETTINGS = {
 
 📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
 Напишите "КОПИТЬ", если хотите накопить больше фигурок перед отправкой.`,
+  shipping_confirmation_template: ``,
   lot_post_template: `#аукцион@dndpotustoronu №{LOT_ID}
 При поддержке GABRIGAME-WORKSHOP!
 Дедлайн {DEADLINE} по МСК!
@@ -60,15 +60,13 @@ const DEFAULT_SETTINGS = {
 https://vk.com/wall{post_id}`,
   low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉
 https://vk.com/wall{post_id}`,
-  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!
-Напишите "АУКЦИОН".`,
+  winner_notification_template: ``,
   winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы "Аукцион ({date})", чтобы забрать свой лот`,
   unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
   invalid_step_template: `👋 Твоя ставка {your_bid}₽ не кратна шагу {bid_step}₽. Попробуй, например, {example_bid}₽ или {example_bid2}₽. Удачи! ✨`,
   max_bid_exceeded_template: `Ого, {your_bid}₽! 📈 Это больше нашего максимума в {max_bid}₽. Может, опечатка? 😉`,
-  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`,
-  notification_preference: 'comment' // 'comment', 'pm', 'both' - предпочтительный способ уведомлений
+  auction_finished_template: `Увы, аукцион по лоту «{lot_name}» уже завершен! 😔 Следи за новыми лотами!`
 };
 
 const SETTINGS_DESCRIPTIONS = {
@@ -79,6 +77,7 @@ const SETTINGS_DESCRIPTIONS = {
   max_bid: "Максимально допустимая ставка (защита от опечаток)",
   delivery_rules: 'Правила доставки (JSON). Формат: "кол-во":цена',
   order_summary_template: "Шаблон сообщения победителю с деталями заказа",
+  shipping_confirmation_template: "Шаблон подтверждения получения данных для доставки",
   outbid_notification_template: "Шаблон уведомления о перебитой ставке",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
   winner_notification_template: "Шаблон уведомления победителю",
@@ -92,16 +91,17 @@ const SETTINGS_DESCRIPTIONS = {
   subscription_check_enabled: "Проверять подписку на группу перед приемом ставки (ВКЛ/ВЫКЛ)",
   debug_logging_enabled: "Включить подробные технические логи (ВКЛ/ВЫКЛ)",
   reply_on_invalid_bid_enabled: "Отвечать комментарием на некорректные ставки (шаг, цена) (ВКЛ/ВЫКЛ)",
-  send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)"
+  send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)",
+  saturday_only_enabled: "Проверять только субботние посты (ВКЛ/ВЫКЛ)"
 };
 
 const TOGGLE_SETTINGS = {
   bid_step_enabled: "ВКЛ",
-  require_subscription: "ВЫКЛ",
   subscription_check_enabled: "ВЫКЛ",
   debug_logging_enabled: "ВЫКЛ",
   reply_on_invalid_bid_enabled: "ВКЛ",
-  send_winner_dm_enabled: "ВКЛ"
+  send_winner_dm_enabled: "ВКЛ",
+  saturday_only_enabled: "ВКЛ"  // NEW: Check only Saturday posts
 };
 
 var _ss_cache = null;
@@ -229,7 +229,7 @@ function logError(src, err, pay) { log("ОШИБКА", `[${src}] ${err.message |
 function logIncoming(data) { log("ВХОДЯЩИЙ", "Webhook от VK", data); }
 
 function toggleSystemSheets(hide) {
-  const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs", "Statistics"];
+  const systemKeys = ["Bids", "NotificationQueue", "EventQueue", "Logs"];
   const ss = getSpreadsheet();
   systemKeys.forEach(key => {
     const sheet = ss.getSheetByName(SHEETS[key].name);
@@ -337,11 +337,6 @@ function createDemoData() {
 
   // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
   settingsSheet.appendRow(["--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", ""]);
-  // Добавляем notification_preference в дополнительные настройки
-  if (!keysPresent.has("notification_preference")) {
-    settingsSheet.appendRow(["notification_preference", "comment", SETTINGS_DESCRIPTIONS["notification_preference"]]);
-  }
-
   // --- ШАБЛОНЫ ---
   settingsSheet.appendRow(["--- ШАБЛОНЫ ---", "", ""]);
   const templateSettingsKeys = Object.keys(DEFAULT_SETTINGS).filter(k => k.endsWith('_template'));

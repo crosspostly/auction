@@ -6,17 +6,22 @@ function doGet(e) {
     // Если e.parameter.secret совпадает с VK_SECRET
     if (secret && e.parameter.secret === secret) {
       try {
-        logInfo("🚀 Запуск тестов через веб-хук (CI/CD)...");
-        const result = runFullCycleSimulation();
-        // Проверяем результат симуляции. Если он содержит маркеры ошибки,
-        // возвращаем ошибку, чтобы CI/CD скрипт мог ее поймать.
-        if (result.includes("FAILED") || result.includes("❌")) {
-          logError("CI_CD_TEST_REPORTED_FAILURE", { result });
-          // Возвращаем сам результат, так как он уже содержит детали ошибки.
-          return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n" + result).setMimeType(ContentService.MimeType.TEXT);
+        logInfo("🚀 Запуск полного тестового набора через веб-хук (CI/CD)...");
+        
+        // Run the complete test suite
+        const testReport = runCompleteTestSuite();
+        
+        // Check if all tests passed
+        const allPassed = testReport.includes("ALL TESTS PASSED") || 
+                         (testReport.includes("Failed: 0") && testReport.includes("✅"));
+        
+        if (allPassed) {
+          logInfo("CI_CD_ALL_TESTS_PASSED");
+          return ContentService.createTextOutput("✅ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО:\n\n" + testReport).setMimeType(ContentService.MimeType.TEXT);
+        } else {
+          logError("CI_CD_TEST_REPORTED_FAILURE", { report: testReport.substring(0, 500) });
+          return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n\n" + testReport).setMimeType(ContentService.MimeType.TEXT);
         }
-        // В случае успеха, возвращаем стандартное сообщение.
-        return ContentService.createTextOutput("✅ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО:\n" + result).setMimeType(ContentService.MimeType.TEXT);
       } catch (error) {
         logError("CI_CD_TEST_FAILED", error);
         return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n" + error.message + "\n\nStack:\n" + error.stack).setMimeType(ContentService.MimeType.TEXT);
@@ -80,31 +85,16 @@ function onOpen() {
   ui.createMenu('VK Auction')
     .addItem('🚀 Мастер настройки', 'runSetupWizard')
     .addItem('🔐 Настройки авторизации', 'showAuthSettings')
+    .addItem('📖 Инструкция', 'showInstructions')
     .addSeparator()
-    .addItem('📖 Открыть инструкцию', 'showInstructions')
-    .addSeparator()
-    .addSubMenu(ui.createMenu('🛠️ Вид таблицы')
-      .addItem('👁️ Показать всё', 'showAllSheets')
-      .addItem('🙈 Скрыть системное', 'hideSystemSheets'))
-    .addSubMenu(ui.createMenu('⚠️ Ручное управление')
+    .addSubMenu(ui.createMenu('🛠️ Управление')
       .addItem('🏁 Завершить аукцион', 'finalizeAuction')
-      .addItem('📨 Отправить очередь', 'processNotificationQueue')
-      .addItem('🔄 Сбросить триггеры', 'setupTriggers'))
-    .addSubMenu(ui.createMenu('🔬 ТЕСТЫ')
-      .addItem('🧪 Запустить все интеграционные тесты', 'runAllIntegrationTests')
-      .addItem('🚀 Полная симуляция (Real API)', 'runFullCycleSimulation')
-      .addItem('🔑 Проверить права токенов (Full)', 'testFullPermissions')
-      .addItem('📋 Тест потока системы', 'runSystemFlowTests')
-      .addItem('🎯 Комплексный тест системы', 'runComprehensiveTest'))
-    .addSubMenu(ui.createMenu('🔧 СЕРВИС')
-      .addItem('⚙️ Проверить и исправить настройки', 'checkAndFixSettings')
-      .addItem('🔍 Проверить функцию валидации', 'testValidateBidFunction')
-      .addItem('👤 Диагностика владельцев токенов', 'identifyTokenOwner'))
-    .addSubMenu(ui.createMenu('📊 МОНИТОРИНГ')
-      .addItem('🔍 Проверить здоровье системы', 'systemHealthCheck')
-      .addItem('🔧 Авто-ремонт системы', 'autoRepairSystem')
-      .addItem('📈 Непрерывный мониторинг', 'continuousMonitoring'))
-    .addSeparator()
+      .addItem('🔄 Пересоздать триггеры', 'setupTriggers')
+      .addItem('🔍 Проверить триггеры', 'checkTriggers')
+      .addItem('🌐 Проверить Callback сервер VK', 'checkVkCallbackServer'))
+    .addSubMenu(ui.createMenu('🧪 Тестирование')
+      .addItem('✅ Запустить все тесты', 'runCompleteTestSuite')
+      .addItem('🚀 Полная симуляция', 'runFullCycleSimulation'))
     .addToUi();
 }
 function showAllSheets() { toggleSystemSheets(false); }
@@ -253,7 +243,140 @@ function diagnosticTest() {
     handleWallPostNew({ type: "wall_post_new", object: { id: 999, owner_id: -groupId, text: "#аукцион\nТест\n№777\nСтарт 777" } });
   } catch (e) { ui.alert('❌ Ошибка: ' + e.message); }
 }
+
+/**
+ * Проверяет состояние триггеров
+ */
+function checkTriggers() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    let triggerInfo = [];
+    
+    triggerInfo.push('=== ТЕКУЩИЕ ТРИГГЕРЫ ===');
+    triggers.forEach((trigger, index) => {
+      const handler = trigger.getHandlerFunction();
+      const timing = 'временной'; // Все наши триггеры time-based
+      triggerInfo.push(`${index + 1}. ${handler} (${timing})`);
+    });
+    
+    triggerInfo.push('\n=== ПРОВЕРКА ОЧЕРЕДИ СОБЫТИЙ ===');
+    const pendingEvents = getSheetData("EventQueue").filter(e => e.data.status === "pending");
+    triggerInfo.push(`Ожидающих обработки: ${pendingEvents.length}`);
+    
+    if (pendingEvents.length > 0) {
+      triggerInfo.push('\nПоследние 5 ожидающих событий:');
+      pendingEvents.slice(0, 5).forEach(event => {
+        const payload = JSON.parse(event.data.payload);
+        triggerInfo.push(`- ${payload.type} (${event.data.eventId.substring(0, 8)})`);
+      });
+    }
+    
+    ui.alert('Состояние триггеров', triggerInfo.join('\n'), ui.ButtonSet.OK);
+    
+  } catch (e) {
+    ui.alert('❌ Ошибка проверки триггеров: ' + e.message);
+  }
+}
+
+/**
+ * Проверяет состояние Callback сервера VK
+ */
+function checkVkCallbackServer() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const groupId = getVkGroupId();
+    const webAppUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL');
+    
+    if (!groupId || !webAppUrl) {
+      ui.alert('❌ Ошибка', 'GROUP_ID или WEB_APP_URL не настроены', ui.ButtonSet.OK);
+      return;
+    }
+    
+    let serverInfo = [];
+    serverInfo.push(`Группа ID: ${groupId}`);
+    serverInfo.push(`URL сервера: ${webAppUrl}`);
+    
+    // Получаем список callback серверов
+    const servers = callVk('groups.getCallbackServers', { group_id: groupId });
+    
+    if (servers && servers.response && servers.response.items) {
+      serverInfo.push(`\n=== CALLBACK СЕРВЕРЫ ===`);
+      serverInfo.push(`Всего серверов: ${servers.response.count}`);
+      
+      const myServer = servers.response.items.find(s => s.url === webAppUrl);
+      
+      if (myServer) {
+        serverInfo.push(`\n✅ НАЙДЕН НАШ СЕРВЕР:`);
+        serverInfo.push(`ID: ${myServer.id}`);
+        serverInfo.push(`Статус: ${myServer.status}`);
+        serverInfo.push(`Title: ${myServer.title}`);
+        
+        // Проверяем настройки событий
+        const settings = callVk('groups.getCallbackSettings', { 
+          group_id: groupId, 
+          server_id: myServer.id 
+        });
+        
+        if (settings && settings.response) {
+          serverInfo.push(`\n=== НАСТРОЙКИ СОБЫТИЙ ===`);
+          const events = [
+            'wall_post_new',
+            'wall_reply_new', 
+            'message_new'
+          ];
+          
+          events.forEach(event => {
+            const enabled = settings.response[event] === 1 ? '✅ ВКЛ' : '❌ ВЫКЛ';
+            serverInfo.push(`${event}: ${enabled}`);
+          });
+          
+          // Если события выключены - включаем их
+          const disabledEvents = events.filter(event => settings.response[event] !== 1);
+          if (disabledEvents.length > 0) {
+            serverInfo.push(`\n🔧 ВКЛЮЧАЕМ СОБЫТИЯ...`);
+            
+            const enableResult = callVk('groups.setCallbackSettings', {
+              group_id: groupId,
+              server_id: myServer.id,
+              wall_post_new: 1,
+              wall_reply_new: 1,
+              message_new: 1
+            });
+            
+            if (enableResult && (enableResult.response === 1 || enableResult === 1)) {
+              serverInfo.push(`✅ Все события успешно включены!`);
+            } else {
+              serverInfo.push(`❌ Ошибка включения событий: ${JSON.stringify(enableResult)}`);
+            }
+          }
+        }
+      } else {
+        serverInfo.push(`\n❌ НАШ СЕРВЕР НЕ НАЙДЕН!`);
+        serverInfo.push(`Проверьте, правильно ли указан URL в настройках.`);
+      }
+      
+      // Показываем все серверы для информации
+      serverInfo.push(`\n=== ВСЕ СЕРВЕРЫ ===`);
+      servers.response.items.forEach((server, index) => {
+        const isOurs = server.url === webAppUrl ? ' (наш)' : '';
+        serverInfo.push(`${index + 1}. ${server.title} - ${server.status}${isOurs}`);
+        serverInfo.push(`   URL: ${server.url}`);
+      });
+      
+    } else {
+      serverInfo.push(`\n❌ Не удалось получить список серверов`);
+      serverInfo.push(`Ошибка: ${JSON.stringify(servers)}`);
+    }
+    
+    ui.alert('Состояние Callback сервера VK', serverInfo.join('\n'), ui.ButtonSet.OK);
+    
+  } catch (e) {
+    ui.alert('❌ Ошибка проверки Callback сервера: ' + e.message);
+  }
+}
 function routeEvent(payload) {
+  // Process the event (already recorded in enqueueEvent)
   switch (payload.type) {
     case "wall_post_new": handleWallPostNew(payload); break;
     case "wall_reply_new": handleWallReplyNew(payload); break;
@@ -313,7 +436,273 @@ function buildUserOrderSummary(userId) {
   return messageText;
 }
 
+/**
+ * Process full payment confirmation
+ * Marks all unpaid orders for the user as paid
+ * @param {string} replyMessageId - ID of the message being replied to
+ * @param {string} adminId - Admin who sent the reply
+ */
+function processFullPayment(replyMessageId, adminId) {
+  try {
+    // Extract user ID from the original message
+    const userId = extractUserIdFromMessage(replyMessageId);
+    if (!userId) {
+      logError('processFullPayment', new Error('Could not extract user ID from message'));
+      sendMessage(adminId, '❌ Не удалось определить пользователя');
+      return;
+    }
+    
+    const orders = getSheetData("Orders");
+    const userOrders = orders.filter(o => 
+      String(o.data.user_id) === userId && o.data.status === 'unpaid'
+    );
+    
+    if (userOrders.length === 0) {
+      sendMessage(adminId, '❌ У пользователя нет неоплаченных заказов');
+      return;
+    }
+    
+    // Update all unpaid orders to paid
+    userOrders.forEach(order => {
+      updateRow("Orders", order.rowIndex, { status: 'paid' });
+    });
+    
+    // Update user's paid count
+    updateUserPaymentStats(userId, userOrders.length);
+    
+    sendMessage(adminId, `✅ Отмечено ${userOrders.length} заказов как оплаченные`);
+    logInfo("ADMIN_PAYMENT_PROCESSED", { 
+      admin_id: adminId, 
+      user_id: userId, 
+      orders_paid: userOrders.length,
+      action: 'full_payment'
+    });
+    
+  } catch (error) {
+    logError('processFullPayment', error);
+    sendMessage(adminId, '❌ Ошибка при обработке оплаты');
+  }
+}
+
+/**
+ * Process no payment confirmation
+ * Adds payment status notes
+ * @param {string} replyMessageId - ID of the message being replied to
+ * @param {string} adminId - Admin who sent the reply
+ */
+function processNoPayment(replyMessageId, adminId) {
+  try {
+    const userId = extractUserIdFromMessage(replyMessageId);
+    if (!userId) {
+      logError('processNoPayment', new Error('Could not extract user ID from message'));
+      sendMessage(adminId, '❌ Не удалось определить пользователя');
+      return;
+    }
+    
+    // Add note to user record
+    const users = getSheetData("Users");
+    const userRow = users.find(u => String(u.data.user_id) === userId);
+    
+    if (userRow) {
+      const currentNotes = userRow.data.payment_notes || '';
+      const newNotes = currentNotes + `\n[${new Date().toLocaleString()}] Не оплатил (отметил админ: ${adminId})`;
+      updateRow("Users", userRow.rowIndex, { payment_notes: newNotes });
+    }
+    
+    sendMessage(adminId, '✅ Пометка "не оплатил" добавлена');
+    logInfo("ADMIN_PAYMENT_PROCESSED", { 
+      admin_id: adminId, 
+      user_id: userId, 
+      action: 'no_payment'
+    });
+    
+  } catch (error) {
+    logError('processNoPayment', error);
+    sendMessage(adminId, '❌ Ошибка при обработке отметки');
+  }
+}
+
+/**
+ * Process partial payment
+ * Parses which lots were paid and updates accordingly
+ * @param {string} text - Admin message text
+ * @param {string} replyMessageId - ID of the message being replied to
+ * @param {string} adminId - Admin who sent the reply
+ */
+function processPartialPayment(text, replyMessageId, adminId) {
+  try {
+    const userId = extractUserIdFromMessage(replyMessageId);
+    if (!userId) {
+      logError('processPartialPayment', new Error('Could not extract user ID from message'));
+      sendMessage(adminId, '❌ Не удалось определить пользователя');
+      return;
+    }
+    
+    // Parse lot IDs from text (e.g., "оплатил лоты: ABC123, XYZ789")
+    const lotIds = parseLotIdsFromText(text);
+    
+    if (lotIds.length === 0) {
+      sendMessage(adminId, '❌ Не удалось распознать номера лотов. Укажите в формате: "оплатил лоты: ABC123, XYZ789"');
+      return;
+    }
+    
+    const orders = getSheetData("Orders");
+    let paidCount = 0;
+    let notPaidCount = 0;
+    
+    // Process each order
+    orders.forEach(order => {
+      if (String(order.data.user_id) === userId && order.data.status === 'unpaid') {
+        const orderLotId = String(order.data.lot_id);
+        
+        if (lotIds.includes(orderLotId)) {
+          // Mark as paid
+          updateRow("Orders", order.rowIndex, { status: 'paid' });
+          paidCount++;
+        } else {
+          // Mark as not paid with note
+          const currentNotes = order.data.admin_notes || '';
+          const newNotes = currentNotes + `\n[${new Date().toLocaleString()}] Не оплачен (админ: ${adminId})`;
+          updateRow("Orders", order.rowIndex, { 
+            admin_notes: newNotes,
+            status: 'unpaid' 
+          });
+          notPaidCount++;
+        }
+      }
+    });
+    
+    // Update user payment stats
+    if (paidCount > 0) {
+      updateUserPaymentStats(userId, paidCount);
+    }
+    
+    sendMessage(adminId, `✅ Обработано: ${paidCount} оплачено, ${notPaidCount} не оплачено`);
+    logInfo("ADMIN_PAYMENT_PROCESSED", { 
+      admin_id: adminId, 
+      user_id: userId, 
+      lots_paid: paidCount,
+      lots_not_paid: notPaidCount,
+      action: 'partial_payment'
+    });
+    
+  } catch (error) {
+    logError('processPartialPayment', error);
+    sendMessage(adminId, '❌ Ошибка при обработке частичной оплаты');
+  }
+}
+/**
+ * Extract user ID from original winner report message
+ * @param {string} messageId - VK message ID
+ * @returns {string|null} User ID or null
+ */
+function extractUserIdFromMessage(messageId) {
+  try {
+    // In production, you'd need to store message-user mapping
+    // For now, return a placeholder
+    // Real implementation would query a Messages table or use message context
+    logDebug("extractUserIdFromMessage: Placeholder implementation", { messageId });
+    return null; // TODO: Implement proper message-user mapping storage
+  } catch (error) {
+    logError('extractUserIdFromMessage', error);
+    return null;
+  }
+}
+
+/**
+ * Parse lot IDs from admin message text
+ * @param {string} text - Message text
+ * @returns {Array<string>} Array of lot IDs
+ */
+function parseLotIdsFromText(text) {
+  // Match patterns like "лоты: ABC123, XYZ789" or "лот ABC123"
+  const patterns = [
+    /лоты?[,:]?\s*([a-zA-Z0-9_,\s]+)/i,
+    /оплатил\s+([a-zA-Z0-9_,\s]+)/i
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const lotString = match[1];
+      return lotString.split(/[,$\s]+/)
+        .map(id => id.trim().toUpperCase())
+        .filter(id => id.length > 0 && /^[A-Z0-9_]+$/.test(id));
+    }
+  }
+  
+  return [];
+}
+
+/**
+ * Update user payment statistics
+ * @param {string} userId - User ID
+ * @param {number} paidCount - Number of newly paid orders
+ */
+function updateUserPaymentStats(userId, paidCount) {
+  try {
+    const users = getSheetData("Users");
+    const userRow = users.find(u => String(u.data.user_id) === userId);
+    
+    if (userRow) {
+      const currentPaid = Number(userRow.data.total_lots_paid) || 0;
+      const newPaid = currentPaid + paidCount;
+      
+      updateRow("Users", userRow.rowIndex, { 
+        total_lots_paid: newPaid,
+        last_payment_date: new Date()
+      });
+      
+      logDebug("User payment stats updated", { 
+        user_id: userId, 
+        old_paid: currentPaid, 
+        new_paid: newPaid 
+      });
+    }
+  } catch (error) {
+    logError('updateUserPaymentStats', error);
+  }
+}
+/**
+ * Handle admin replies to winner reports
+ * Processes admin responses to mark orders as paid/unpaid
+ * @param {Object} payload - VK message payload
+ */
+function handleAdminReply(payload) {
+  const settings = getSettings();
+  const adminIds = (settings.ADMIN_IDS || '').toString().split(',').map(id => id.trim()).filter(id => id);
+  
+  const message = payload.object.message;
+  const userId = String(message.from_id);
+  const text = (message.text || '').toLowerCase().trim();
+  const replyMessageId = message.reply_message ? message.reply_message.id : null;
+  
+  // Check if sender is admin
+  if (!adminIds.includes(userId)) {
+    logDebug("handleAdminReply: Ignoring non-admin message", { userId });
+    return;
+  }
+  
+  // Check if this is a reply to a winner report
+  if (!replyMessageId) {
+    logDebug("handleAdminReply: Not a reply message", { text });
+    return;
+  }
+  
+  // Process admin commands
+  if (text === 'оплатил') {
+    processFullPayment(replyMessageId, userId);
+  } else if (text === 'не оплатил') {
+    processNoPayment(replyMessageId, userId);
+  } else if (text.includes('оплатил')) {
+    processPartialPayment(text, replyMessageId, userId);
+  }
+}
+
 function handleMessageNew(payload) {
+    // Add admin reply handling first
+    handleAdminReply(payload);
+    
     const settings = getSettings();
     const codeWord = (settings.CODE_WORD || 'Аукцион').toLowerCase();
     const message = payload.object.message;
@@ -399,7 +788,12 @@ function handleMessageNew(payload) {
 
         if (userRow) {
             updateRow("Users", userRow.rowIndex, { shipping_details: shippingDetails });
-            sendMessage(userId, '✅ Спасибо, данные для доставки приняты!');
+            
+            // Get confirmation message from settings
+            const settings = getSettings();
+            const confirmationMsg = settings.shipping_confirmation_template || 'Ошибка: шаблон подтверждения не найден в Настройках!';
+            
+            sendMessage(userId, confirmationMsg);
             Monitoring.recordEvent('SHIPPING_INFO_RECEIVED', { userId: userId, details: shippingDetails });
         } else {
             logError('handleMessageNew', new Error('Could not find user to save shipping info'), {userId: userId});
@@ -438,10 +832,52 @@ function handleWallPostNew(payload) {
 function parseLotFromPost(postObject) {
   try {
     const text = postObject.text || "";
-    if (!/#аукцион/i.test(text)) return null;
-
+    
+    // Log incoming post for debugging
+    logInfo("📥 Новый пост получен", { 
+      post_id: postObject.id,
+      owner_id: postObject.owner_id,
+      text_preview: text.substring(0, 200),
+      has_auction_tag: /#аукцион/i.test(text),
+      has_lot_number: /№\s*[a-zA-Z0-9_]+/i.test(text)
+    });
+    
+    if (!/#аукцион/i.test(text)) {
+      logInfo("❌ Пост не содержит #аукцион", { text_preview: text.substring(0, 100) });
+      return null;
+    }
+    
+    // Check if Saturday-only mode is enabled
+    const settings = getSettings();
+    const saturdayOnly = getSetting('saturday_only_enabled') === 'ВКЛ';
+    
+    if (saturdayOnly) {
+      // Check if post was made on Saturday
+      const postDate = new Date(postObject.date * 1000); // VK uses Unix timestamp
+      const dayOfWeek = postDate.getDay(); // 0 = Sunday, 6 = Saturday
+      
+      logInfo("📅 Проверка дня недели", { 
+        post_timestamp: postObject.date,
+        post_date: postDate.toDateString(),
+        day_of_week: dayOfWeek,
+        is_saturday: dayOfWeek === 6
+      });
+      
+      if (dayOfWeek !== 6) { // 6 = Saturday
+        logInfo("Пост проигнорирован: не суббота", { 
+          post_date: postDate.toDateString(), 
+          day_of_week: dayOfWeek,
+          text_preview: text.substring(0, 100) 
+        });
+        return null;
+      }
+    }
+    
     const lotNumberMatch = text.match(/(?:[#аукцион\w@]+\s*)?(?:№|No\.|Number)\s*([a-zA-Z0-9_]+)/i);
-    if (!lotNumberMatch) return null;
+    if (!lotNumberMatch) {
+      logInfo("❌ Не найден номер лота", { text_preview: text.substring(0, 100) });
+      return null;
+    }
     const lotId = lotNumberMatch[1];
     let name = "Лот №" + lotId;
     let startPrice = 0;
@@ -520,16 +956,17 @@ function parseDeadline(text) {
 }
 function handleWallReplyNew(payload) {
   const comment = payload.object || {};
+  const ownerId = payload.group_id || getVkGroupId(); // Получаем group_id из payload или настройки
   
   // Enhanced debug log at the very start
   logInfo('🎤 handleWallReplyNew received', {
     from_id: comment.from_id,
     text: comment.text,
     post_id: comment.post_id,
-    owner_id: comment.owner_id
+    owner_id: ownerId
   });
 
-  const postKey = `${comment.owner_id}_${comment.post_id}`;
+  const postKey = `-${ownerId}_${comment.post_id}`; // Используем ownerId, добавляем минус для owner_id
   
   // ADDED: Detailed initial log
   Monitoring.recordEvent('HANDLE_WALL_REPLY_NEW_START', { 
@@ -622,7 +1059,7 @@ function handleWallReplyNew(payload) {
         bid_amount: bid,
         timestamp: new Date(),
         comment_id: comment.id,
-        status: "ошибка"
+        status: "некорректная"
       });
 
       // ВСЕГДА отвечаем пользователю в комментариях, почему ставка не принята
@@ -829,7 +1266,7 @@ function sendNotification(queueRow) {
 }
 function buildOutbidMessage(p) {
   const settings = getSettings();
-  const template = settings.outbid_notification_template || "🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}";
+  const template = settings.outbid_notification_template || "Ошибка: шаблон не найден в Настройках.";
   logDebug("buildOutbidMessage: Using template from settings", { 
     has_setting: !!settings.outbid_notification_template,
     template_length: template.length,
@@ -848,10 +1285,10 @@ function buildWinnerMessage(p) {
   const paymentPhone = props.PAYMENT_PHONE || '';
   const paymentBank = props.PAYMENT_BANK || '';
 
-  // Use winner-specific template if available, otherwise fall back to order summary template
+  // Use winner-specific template ONLY from settings
   const template = settings.winner_notification_template ||
                    settings.order_summary_template ||
-                   "🎉 Вы выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".";
+                   "Ошибка: шаблон не найден в Настройках. Обратитесь к администратору.";
   
   logDebug("buildWinnerMessage: Using template from settings", { 
     has_winner_setting: !!settings.winner_notification_template,
@@ -870,7 +1307,7 @@ function buildWinnerMessage(p) {
 
 function buildLowBidMessage(p) {
   const settings = getSettings();
-  const template = settings.low_bid_notification_template || "👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}";
+  const template = settings.low_bid_notification_template || "Ошибка: шаблон не найден в Настройках.";
   
   logDebug("buildLowBidMessage: Using template from settings", { 
     has_setting: !!settings.low_bid_notification_template,
@@ -889,7 +1326,7 @@ function buildLowBidMessage(p) {
 
 function buildSubscriptionRequiredMessage(p) {
   const settings = getSettings();
-  const template = settings.subscription_required_template || "📢 Для участия в аукционе требуется подписка на нашу группу!\nПодпишитесь, чтобы иметь возможность делать ставки.\nЛот: «{lot_name}»\nhttps://vk.com/wall{post_id}";
+  const template = settings.subscription_required_template || "Ошибка: шаблон не найден в Настройках.";
   
   logDebug("buildSubscriptionRequiredMessage: Using template from settings", { 
     has_setting: !!settings.subscription_required_template,
@@ -904,7 +1341,7 @@ function buildSubscriptionRequiredMessage(p) {
 
 function buildWinnerCommentMessage(p) {
   const settings = getSettings();
-  const template = settings.winner_comment_template || "Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот";
+  const template = settings.winner_comment_template || "Ошибка: шаблон не найден в Настройках.";
   
   logDebug("buildWinnerCommentMessage: Using template from settings", { 
     has_setting: !!settings.winner_comment_template,
@@ -1140,19 +1577,52 @@ function setupTriggers() {
   // Delete all existing triggers to avoid duplicates
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
 
-  // Trigger for processing the notification queue every minute
-  ScriptApp.newTrigger("processNotificationQueue").timeBased().everyMinutes(1).create();
+  // Trigger for processing the notification queue every 5 minutes (GAS limitation)
+  ScriptApp.newTrigger("processNotificationQueue").timeBased().everyMinutes(5).create();
 
-  // Trigger for processing the new event queue every minute
-  ScriptApp.newTrigger("processEventQueue").timeBased().everyMinutes(1).create();
+  // Trigger for processing the new event queue every 5 minutes (GAS limitation)
+  ScriptApp.newTrigger("processEventQueue").timeBased().everyMinutes(5).create();
 
   // Trigger for finalizing the auction on a schedule
   ScriptApp.newTrigger("finalizeAuction").timeBased().onWeekDay(ScriptApp.WeekDay.SATURDAY).atHour(21).create();
+  
+  // Trigger for processing admin replies to messages every 10 minutes
+  ScriptApp.newTrigger("processAdminReplies").timeBased().everyMinutes(10).create();
   
   // Setup monitoring and maintenance triggers
   setupPeriodicMonitoring();
   setupDailyMaintenance();
 }
+/**
+ * Process admin replies via trigger
+ * Polls for new admin messages and processes payment commands
+ */
+function processAdminReplies() {
+  try {
+    // This would poll VK for new messages from admins
+    // Placeholder implementation - in production would use VK messages.getLongPollHistory
+    
+    logDebug("processAdminReplies: Polling for admin messages");
+    
+    // TODO: Implement VK message polling for admin replies
+    // 1. Get admin IDs from settings
+    // 2. Poll VK for new messages
+    // 3. Filter messages from admins that are replies
+    // 4. Process payment commands
+    
+    Monitoring.recordEvent('ADMIN_REPLY_POLLING', {
+      timestamp: new Date(),
+      status: 'placeholder' // Change when implemented
+    });
+    
+  } catch (error) {
+    logError('processAdminReplies', error);
+    Monitoring.recordEvent('ADMIN_REPLY_POLLING_ERROR', {
+      error: error.message
+    });
+  }
+}
+
 function buildPostKey(ownerId, postId) { return `${ownerId}_${postId}`; }
 function parsePostKey(postKey) {
   const parts = String(postKey).split("_");
@@ -1349,45 +1819,11 @@ function cleanupOldLogs() {
 
 /**
  * Cleans up old statistics entries
+ * Now cleans up old logs since Statistics was merged with Logs
  */
 function cleanupOldStats() {
-  try {
-    const daysToKeep = 90;
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    
-    const statsSheet = getSheet("Statistics");
-    const values = statsSheet.getDataRange().getValues();
-    
-    if (values.length <= 1) return; // Only header row
-    
-    // Find rows to delete (starting from bottom to avoid index shifting)
-    const rowsToDelete = [];
-    for (let i = values.length - 1; i >= 1; i--) { // Skip header row
-      const dateStr = values[i][0]; // Assuming date is in first column
-      if (dateStr instanceof Date && dateStr < cutoffDate) {
-        rowsToDelete.unshift(i + 1); // Convert to 1-indexed
-      }
-    }
-    
-    // Delete rows
-    for (const rowIndex of rowsToDelete) {
-      statsSheet.deleteRow(rowIndex);
-    }
-    
-    if (rowsToDelete.length > 0) {
-      Monitoring.recordEvent('STATS_CLEANUP_PERFORMED', {
-        rowsDeleted: rowsToDelete.length,
-        cutoffDate: cutoffDate
-      });
-    }
-    
-  } catch (error) {
-    Monitoring.recordEvent('STATS_CLEANUP_ERROR', {
-      error: error.message
-    });
-    Logger.log(`Ошибка при очистке статистики: ${error.message}`);
-  }
+  // Now handled by cleanupOldLogs() since Statistics was merged with Logs
+  cleanupOldLogs();
 }
 
 // Вспомогательная функция для тестового фреймворка
@@ -1510,7 +1946,7 @@ function systemHealthCheck() {
  */
 function checkRequiredSheets() {
   try {
-    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'Statistics', 'EventQueue', 'NotificationQueue', 'Logs'];
+    const requiredSheets = ['Config', 'Bids', 'Users', 'Orders', 'Settings', 'EventQueue', 'NotificationQueue', 'Logs'];
     const missingSheets = [];
     
     for (const sheetKey of requiredSheets) {
