@@ -341,3 +341,68 @@ function testVkCommentPermission() {
   }, token);
   Logger.log("--- END TEST ---");
 }
+
+/**
+ * ПРОВЕРКА: Доходят ли запросы от VK вообще?
+ */
+function checkIncomingEvents() {
+  try {
+    const data = getSheetData("Incoming");
+    
+    if (data.length === 0) {
+      Logger.log('❌ НЕТ ВХОДЯЩИХ СОБЫТИЙ!');
+      Logger.log('Это означает, что VK вообще не отправляет запросы на ваш URL.');
+      return;
+    }
+    
+    Logger.log(`✅ Найдено ${data.length} входящих событий`);
+    
+    Logger.log('Последние 5:');
+    data.slice(-5).reverse().forEach(row => {
+      Logger.log(`[${row.data.date}] ${row.data.type} | ${String(row.data.payload).substring(0, 100)}`);
+    });
+  } catch (e) {
+    Logger.log('❌ Ошибка при проверке событий: ' + e.message);
+  }
+}
+
+/**
+ * Проверка URL веб-приложения
+ */
+function checkDeploymentUrl() {
+  const props = PropertiesService.getScriptProperties();
+  const savedUrl = props.getProperty('WEB_APP_URL');
+  
+  Logger.log('=== ПРОВЕРКА URL ===');
+  Logger.log('URL в настройках скрипта:');
+  Logger.log(savedUrl || '❌ НЕ УКАЗАН');
+  Logger.log('\nДля получения URL: Deploy -> New deployment -> Web app (Everyone).');
+}
+
+/**
+ * Ручной тест doPost (симуляция входящего события)
+ */
+function testDoPostManually() {
+  const gid = getVkGroupId();
+  const fakeEvent = {
+    postData: {
+      contents: JSON.stringify({
+        type: 'wall_post_new',
+        object: {
+          id: Math.floor(Math.random() * 100000),
+          owner_id: -Number(gid),
+          text: '#аукцион\nЛот: Тестовый предмет\n№DEBUG' + Math.floor(Math.random() * 100) + '\nСтарт 500р',
+          date: Math.floor(Date.now() / 1000),
+          attachments: []
+        },
+        group_id: Number(gid)
+      })
+    },
+    parameter: {}
+  };
+  
+  Logger.log('📤 Отправляем тестовый запрос в doPost...');
+  const response = doPost(fakeEvent);
+  Logger.log('📥 Ответ: ' + response.getContent());
+  Logger.log('\nПроверьте лист "Лоты" - должен появиться новый лот.');
+}

@@ -479,6 +479,9 @@ function verifyCallbackFix() {
 }
 
 function routeEvent(payload) {
+  // ✅ Трассировка вызова (новое требование для диагностики)
+  logInfo('🎯 routeEvent called', { type: payload.type, hasObject: !!payload.object });
+
   // Process the event (already recorded in enqueueEvent)
   switch (payload.type) {
     case "wall_post_new": handleWallPostNew(payload); break;
