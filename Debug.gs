@@ -160,8 +160,7 @@ function forceClearAllQueues() {
 
 function resetAndRestart() {
   setupTriggers();
-  resetSimulationCounter();
-  Logger.log("Triggers reset and simulation counter cleared.");
+  Logger.log("Triggers reset.");
 }
 
 /**

@@ -1,13 +1,56 @@
 const SHEETS = {
   Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline", "bid_step", "image_url", "attachment_id"] },
-  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id", "status"] },
+  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "post_id", "user_id", "bid_amount", "timestamp", "comment_id", "status"] },
   Users: { name: "Пользователи", headers: ["user_id", "user_name", "first_win_date", "last_win_date", "total_lots_won", "total_lots_paid", "shipping_status", "shipping_details"] },
   Orders: { name: "Заказы", headers: ["order_id", "lot_id", "lot_name", "post_id", "user_id", "win_date", "win_price", "status", "shipping_batch_id"] },
+  Winners: { name: "Победители", headers: ["winner_id", "lot_id", "win_price", "status"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
   Incoming: { name: "Входящие", headers: ["date", "type", "group_id", "params", "payload"] },
+  OrderStatuses: { name: "Статусы Заказов", headers: ["status_key", "status_description"] },
   Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
+};
+
+const SHIPPING_STATUS_OPTIONS = [
+  "Накопление",
+  "Готов к отправке",
+  "Ожидает отправки",
+  "Отправлено",
+  "Доставлено",
+  "Проблема"
+];
+
+const SHIPPING_STATUS_DESCRIPTIONS = {
+  "Накопление": "Пользователь продолжает копить лоты, не готов к отправке.",
+  "Готов к отправке": "Пользователь запросил отправку (например, написал \"АУКЦИОН\"), но еще не оплатил или не предоставил все детали.",
+  "Ожидает отправки": "Оплата получена, все данные есть, лоты ожидают физической отправки.",
+  "Отправлено": "Лоты отправлены.",
+  "Доставлено": "Лоты получены пользователем.",
+  "Проблема": "Возникли сложности с отправкой (возврат, неверный адрес и т.п.)."
+};
+
+const USER_HEADERS_DESCRIPTIONS = {
+  user_id: "Уникальный ID пользователя VK.",
+  user_name: "Имя и фамилия пользователя VK.",
+  first_win_date: "Дата первой победы в аукционе.",
+  last_win_date: "Дата последней победы в аукционе.",
+  total_lots_won: "Общее количество выигранных лотов.",
+  total_lots_paid: "Количество оплаченных лотов.",
+  shipping_status: "Текущий статус отправки лотов для пользователя.",
+  shipping_details: "Детали доставки (адрес, ФИО, телефон), предоставленные пользователем."
+};
+
+const ORDER_HEADERS_DESCRIPTIONS = {
+  order_id: "Уникальный ID заказа.",
+  lot_id: "ID лота, к которому относится заказ.",
+  lot_name: "Название лота.",
+  post_id: "ID поста VK с лотом.",
+  user_id: "ID пользователя, выигравшего лот.",
+  win_date: "Дата выигрыша лота.",
+  win_price: "Цена выигрыша лота.",
+  status: "Статус оплаты заказа (unpaid, paid, abandoned).",
+  shipping_batch_id: "ID партии доставки, если лот отправлен."
 };
 
 const DEFAULT_SETTINGS = {
@@ -16,11 +59,30 @@ const DEFAULT_SETTINGS = {
   min_bid_increment: 50,
   max_bid: 1000000,
   delivery_rules: '{"1-3":450,"4-6":550,"7+":650}',
-  order_summary_template: `Добрый день!\n\nВаши выигранные лоты:\n{LOTS_LIST}\n\nСумма за лоты: {LOTS_TOTAL}₽\nДоставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽\n━━━━━━━━━━━━━━━━━━━\nИТОГО К ОПЛАТЕ: {TOTAL_COST}₽\n\nДля оформления отправки пришлите:\n1. ФИО полностью\n2. Город и адрес (или СДЭК/Почта России)\n3. Номер телефона\n4. Скриншот оплаты\n\n💳 Реквизиты для оплаты:\n{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}\n\n📦 П.С. Можете копить фигурки! Аукцион каждую субботу.\nНапишите \"КОПИТЬ\", если хотите накопить больше фигурок перед отправкой.`,
-  lot_post_template: `#аукцион@dndpotustoronu №{LOT_ID}\nПри поддержке GABRIGAME-WORKSHOP!\nДедлайн {DEADLINE} по МСК!\n🎁Лот - на картинке. + миниатюра идет с красивой, текстурной базой.\n\n👀Старт {START_PRICE}р и шаг - {BID_STEP}р.\nКаждая миниатюра аукциона масштабом 32-35мм.\nПОДАРОК ТОМУ, КТО ЗАБЕРЁТ ЗА ДЕНЬ БОЛЬШЕ ВСЕГО МИНИАТЮР!\nДата окончания аукциона {DEADLINE_DATE} (суббота) в {DEADLINE_TIME} по Москве.\n\nВ случае, если за 10 минут (или меньше) до окончания аукциона делается ставка, например, в 20:59, аукцион на данный лот продлевается на 10 минут - до 21:09. Начиная с 20:50, продление на 10 минут происходит с каждой новой ставкой.\n\nПосле аукциона пиши ТОЛЬКО в ЛС группы. Опасайся МОШЕННИКОВ пишущих тебе в ЛС. Отправь картинки миниатюр которые выиграл. Напиши Телефон, ФИО, Город, Адрес (пункт СДЭК). И как тебе отправить, Почтой или СДЭКом.\n\nДОСТАВКА ЗА СЧЁТ ПОБЕДИТЕЛЯ почтой России с отправкой из Волгограда. (До 3 фигурок 450р, дальше уточним). Отправка по четвергам.\n\nОплата на карту в течение 3 дней после победы.`,
-  outbid_notification_template: `🔔 Ваша ставка перебита!\nЛот: {lot_name}\nНовая ставка: {new_bid}₽\nhttps://vk.com/wall{post_id}`,
-  low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉\nhttps://vk.com/wall{post_id}`,
-  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите \"АУКЦИОН\".`,
+  order_summary_template: `Добрый день!
+
+Ваши выигранные лоты:
+{LOTS_LIST}
+
+Сумма за лоты: {LOTS_TOTAL}₽
+Доставка ({ITEM_COUNT} фигурок): {DELIVERY_COST}₽
+━━━━━━━━━━━━━━━━━━━
+ИТОГО К ОПЛАТЕ: {TOTAL_COST}₽
+
+Для оформления отправки пришлите:
+1. ФИО полностью
+2. Город и адрес (или СДЭК/Почта России)
+3. Номер телефона
+4. Скриншот оплаты
+
+💳 Реквизиты для оплаты:
+{PAYMENT_BANK} (СБП): {PAYMENT_PHONE}
+
+📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
+Напишите ""КОПИТЬ"", если хотите накопить больше фигурок перед отправкой.`,
+  outbid_notification_template: `🔔 Ваша ставка перебита!`,
+  low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉`,
+  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите ""АУКЦИОН"".`,
   winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот`,
   unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
@@ -32,7 +94,8 @@ const DEFAULT_SETTINGS = {
   debug_logging_enabled: 'ВЫКЛ',
   reply_on_invalid_bid_enabled: 'ВКЛ',
   send_winner_dm_enabled: 'ВКЛ',
-  saturday_only_enabled: 'ВКЛ'
+  saturday_only_enabled: 'ВКЛ',
+  test_mode_enabled: 'ВЫКЛ'
 };
 
 const SETTINGS_DESCRIPTIONS = {
@@ -57,7 +120,8 @@ const SETTINGS_DESCRIPTIONS = {
   debug_logging_enabled: "Включить подробные технические логи (ВКЛ/ВЫКЛ)",
   reply_on_invalid_bid_enabled: "Отвечать комментарием на некорректные ставки (шаг, цена) (ВКЛ/ВЫКЛ)",
   send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)",
-  saturday_only_enabled: "Обрабатывать только посты, опубликованные в субботу (ВКЛ/ВЫКЛ)"
+  saturday_only_enabled: "Обрабатывать только посты, опубликованные в субботу (ВКЛ/ВЫКЛ)",
+  test_mode_enabled: "Режим тестирования. Если ВКЛ, аукцион длится 5 минут. (ВКЛ/ВЫКЛ)"
 };
 
 const TOGGLE_SETTINGS = {
@@ -86,6 +150,10 @@ function getSheet(sheetKey) {
     try {
       sheet = ss.insertSheet(config.name);
       ensureHeaders(sheet, config.headers);
+      
+      // Apply date formatting to known date columns in ANY sheet
+      applyDateFormatting(sheet, config.headers);
+      
       logInfo(`Создан новый лист: ${config.name}`);
     } catch (e) {
       throw new Error(`Не удалось создать лист "${config.name}": ${e.message}`);
@@ -94,28 +162,42 @@ function getSheet(sheetKey) {
   return sheet;
 }
 
-function ensureHeaders(sheet, headers) {
-  const lastRow = sheet.getLastRow();
+function applyDateFormatting(sheet, headers) {
+  const dateColumns = ['created_at', 'deadline', 'timestamp', 'date', 'receivedAt', 'processed_at', 'win_date', 'first_win_date', 'last_win_date'];
   
-  if (lastRow === 0) {
-    // Лист пуст — просто пишем заголовки
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
-    sheet.setFrozenRows(1);
-    return;
+  dateColumns.forEach(colName => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      // Apply format to the entire column (rows 2 to max)
+      // Use full timestamp format for precision
+      sheet.getRange(2, colIndex, sheet.getMaxRows() - 1, 1)
+           .setNumberFormat("dd.MM.yyyy HH:mm:ss");
+    }
+  });
+}
+
+function ensureHeaders(sheet, headers) {
+  const lastColumn = sheet.getLastColumn();
+  const headerRange = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn) : null;
+  const currentHeaders = headerRange ? headerRange.getValues()[0] : [];
+
+  // Check if headers are already perfect
+  if (currentHeaders.length === headers.length && currentHeaders.every((h, i) => String(h) === String(headers[i]))) {
+    return; // Headers are fine, do nothing.
   }
 
-  // Лист не пуст. Проверяем первую строку.
-  const firstRowValues = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-  const isMatch = headers.every((h, i) => String(firstRowValues[i]) === String(h));
-
-  if (!isMatch) {
-    // Заголовки не совпадают! Значит, это данные, а заголовков нет.
-    // Вставляем строку сверху и пишем заголовки.
-    sheet.insertRowBefore(1);
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
-    sheet.setFrozenRows(1);
-    Logger.log(`Headers restored for sheet: ${sheet.getName()}`);
+  // If we're here, headers are wrong or missing. Overwrite them.
+  // This is safer than trying to insert columns.
+  
+  // Clear the old header range to remove any extra columns
+  if (headerRange) {
+    headerRange.clearContent();
   }
+  
+  // Write the new, correct headers
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
+  sheet.setFrozenRows(1);
+  Logger.log(`Headers enforced for sheet: ${sheet.getName()}`);
 }
 
 function getSheetData(sheetKey) {
@@ -157,8 +239,23 @@ function getSheetData(sheetKey) {
 function appendRow(sheetKey, rowData) {
   const sheet = getSheet(sheetKey);
   const headers = SHEETS[sheetKey].headers;
-  const row = headers.map(h => rowData[h] !== undefined ? rowData[h] : "");
-  sheet.appendRow(row);
+  
+  const row = headers.map(h => {
+    let val = rowData[h];
+    // --- FORCE DATE FORMATTING ---
+    if (val instanceof Date) {
+      return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
+    }
+    return val !== undefined ? val : "";
+  });
+  
+  // Insert new row immediately after the header (row 1)
+  // This makes the newest entries appear at the top (descending order)
+  sheet.insertRowAfter(1);
+  const range = sheet.getRange(2, 1, 1, row.length);
+  range.setValues([row]);
+  range.setFontWeight("normal"); // Reset formatting to normal (not bold)
+  
   SpreadsheetApp.flush(); // Force the sheet to update immediately
   CacheService.getScriptCache().remove('sheet_' + sheetKey); // Always clear cache on write
 }
@@ -173,7 +270,12 @@ function updateRow(sheetKey, rowIndex, rowData) {
   const currentRowValues = range.getValues()[0];
   
   const updatedRow = headers.map((h, i) => {
-    return rowData[h] !== undefined ? rowData[h] : currentRowValues[i];
+    let val = rowData[h] !== undefined ? rowData[h] : currentRowValues[i];
+    // --- FORCE DATE FORMATTING ---
+    if (val instanceof Date) {
+      return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
+    }
+    return val;
   });
   
   range.setValues([updatedRow]);
@@ -249,6 +351,14 @@ function upsertLot(lot) {
   const rows = getSheetData(sheetKey);
   const existing = rows.find(r => String(r.data.lot_id) === String(lot.lot_id));
   
+  // Format post_id as a clickable link if it looks like a valid VK post ID
+  if (lot.post_id && String(lot.post_id).includes('_')) {
+    // Escape double quotes just in case, though post_id shouldn't have them
+    const safePostId = String(lot.post_id).replace(/"/g, '""');
+    // Formula: =HYPERLINK("https://vk.com/wall-213_123"; "-213_123")
+    lot.post_id = `=HYPERLINK("https://vk.com/wall${safePostId}"; "${safePostId}")`;
+  }
+
   Monitoring.recordEvent('UPSERT_LOT_ATTEMPT', { 
     lot_id: lot.lot_id, 
     exists: !!existing, 
@@ -262,16 +372,46 @@ function upsertLot(lot) {
   }
 }
 
+// Helper to extract plain ID from HYPERLINK formula if present
+function extractIdFromFormula(val) {
+  if (!val) return "";
+  const s = String(val);
+  if (s.startsWith("=HYPERLINK")) {
+    const match = s.match(/;\s*"([^"]+)"\)/i);
+    return match ? match[1] : s;
+  }
+  return s;
+}
+
 function findLotByPostId(postId) {
   const rows = getSheetData("Config");
-  const match = rows.find(r => String(r.data.post_id) === String(postId));
+  const match = rows.find(r => extractIdFromFormula(r.data.post_id) === String(postId));
   return match ? match.data : null;
+}
+
+/**
+ * Checks if a bid with a given comment_id already exists.
+ * This is a robust way to prevent processing duplicate events.
+ * @param {string} commentId The VK comment ID to check.
+ * @returns {boolean} True if the bid exists, false otherwise.
+ */
+function isBidExists(commentId) {
+  if (!commentId) return false;
+  const bids = getSheetData("Bids");
+  return bids.some(b => String(b.data.comment_id) === String(commentId));
 }
 
 function updateLot(lotId, updates) {
   const rows = getSheetData("Config");
   const existing = rows.find(r => String(r.data.lot_id) === String(lotId));
-  if (existing) updateRow("Config", existing.rowIndex, updates);
+  if (existing) {
+    // If updating post_id, wrap in HYPERLINK
+    if (updates.post_id && !String(updates.post_id).startsWith("=HYPERLINK")) {
+      const safeId = String(updates.post_id).replace(/"/g, '""');
+      updates.post_id = `=HYPERLINK("https://vk.com/wall${safeId}"; "${safeId}")`;
+    }
+    updateRow("Config", existing.rowIndex, updates);
+  }
 }
 
 function getSettings() {
@@ -316,45 +456,49 @@ function createDemoData() {
     appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
   }
 
-  const settingsSheet = getSheet('Settings');
-  // Очищаем существующие настройки (кроме заголовков)
-  const dataRange = settingsSheet.getDataRange();
-  if (dataRange.getNumRows() > 1) {
-    settingsSheet.deleteRows(2, dataRange.getNumRows() - 1);
-  }
-
-  const addSetting = (key, value, description) => {
-    settingsSheet.appendRow([key, value, description]);
+  const addSettingIfNotExists = (key, value, description) => {
+    // Re-fetch existing settings inside the helper to ensure we have the latest data,
+    // as appendRow will clear the cache.
+    const existingSettings = getSheetData('Settings').map(s => s.data.setting_key);
+    if (!existingSettings.includes(key)) {
+      // Use the project's custom appendRow to ensure cache is busted for the next check.
+      appendRow("Settings", { 
+        setting_key: key, 
+        setting_value: value, 
+        description: description 
+      });
+    }
   };
 
   // --- АДМИНИСТРАТОР ---
-  addSetting("--- АДМИНИСТРАТОР ---", "", "");
-  addSetting("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
+  addSettingIfNotExists("--- АДМИНИСТРАТОР ---", "", "");
+  addSettingIfNotExists("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
 
   // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
-  addSetting("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
+  addSettingIfNotExists("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
   for (const key of ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"]) {
-    addSetting(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
 
   // --- ПЕРЕКЛЮЧАТЕЛИ ---
-  addSetting("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
+  addSettingIfNotExists("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
   for (const key of [
     "bid_step_enabled",
     "subscription_check_enabled",
     "debug_logging_enabled",
     "reply_on_invalid_bid_enabled",
     "send_winner_dm_enabled",
-    "saturday_only_enabled"
+    "saturday_only_enabled",
+    "test_mode_enabled"
   ]) {
-    addSetting(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
 
   // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
-  addSetting("--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", "");
+  addSettingIfNotExists("--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", "");
 
   // --- ШАБЛОНЫ ---
-  addSetting("--- ШАБЛОНЫ ---", "", "");
+  addSettingIfNotExists("--- ШАБЛОНЫ ---", "", "");
   const templateKeys = [
     "order_summary_template",
     "winner_comment_template",
@@ -368,12 +512,50 @@ function createDemoData() {
     "auction_finished_template",
   ];
   for (const key of templateKeys) {
-    addSetting(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
   
-  applyDropdownValidation(); // Применяем выпадающие списки
-  setupConditionalFormatting(); // Применяем условное форматирование
+  applyDropdownValidation();
+  setupConditionalFormatting();
+
+  const usersSheet = getSheet('Users');
+  const ordersSheet = getSheet('Orders');
+  const orderStatusesSheet = getSheet('OrderStatuses');
+
+  if (orderStatusesSheet.getLastRow() <= 1) {
+    SHIPPING_STATUS_OPTIONS.forEach(status => {
+      appendRow('OrderStatuses', { status_key: status, status_description: SHIPPING_STATUS_DESCRIPTIONS[status] });
+    });
+  }
+
+  const usersHeaders = SHEETS.Users.headers;
+  const shippingStatusColIndex = usersHeaders.indexOf('shipping_status') + 1;
+  if (shippingStatusColIndex > 0) {
+    const dropdownRange = usersSheet.getRange(2, shippingStatusColIndex, 999, 1);
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(SHIPPING_STATUS_OPTIONS)
+      .setAllowInvalid(false)
+      .setHelpText('Выберите статус отправки из списка.')
+      .build();
+    dropdownRange.setDataValidation(rule);
+  }
+
+  applyHeaderTooltips(usersSheet, SHEETS.Users.headers, USER_HEADERS_DESCRIPTIONS);
+  applyHeaderTooltips(ordersSheet, SHEETS.Orders.headers, ORDER_HEADERS_DESCRIPTIONS);
 }
+
+// Новая вспомогательная функция для применения тултипов
+function applyHeaderTooltips(sheet, headers, descriptions) {
+  if (!sheet) return;
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  for (let i = 0; i < headers.length; i++) {
+    const headerKey = headers[i];
+    if (descriptions[headerKey]) {
+      sheet.getRange(1, i + 1).setNote(descriptions[headerKey]);
+    }
+  }
+}
+
 
 function applyDropdownValidation() {
   const sheet = getSheet('Settings');
@@ -388,7 +570,8 @@ function applyDropdownValidation() {
       "debug_logging_enabled",
       "reply_on_invalid_bid_enabled",
       "send_winner_dm_enabled",
-      "saturday_only_enabled"
+      "saturday_only_enabled",
+      "test_mode_enabled"
     ].includes(settingKey)) {
       const range = sheet.getRange(i + 1, 2); // Column B for setting_value
 
@@ -506,9 +689,4 @@ function updateNotificationStatus(id, status, date) {
   const rows = getSheetData("NotificationQueue");
   const match = rows.find(r => String(r.data.queue_id) === String(id));
   if (match) updateRow("NotificationQueue", match.rowIndex, { status: status, processed_at: date || new Date() });
-}
-
-function updateWinnersStatus(userId, status) {
-  const rows = getSheetData("Winners");
-  rows.forEach(r => { if (String(r.data.winner_id) === String(userId)) updateRow("Winners", r.rowIndex, { status: status }); });
 }

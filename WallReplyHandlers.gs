@@ -27,11 +27,15 @@ function handleWallReplyEdit(payload) {
     const newBidAmount = parseBid(comment.text || "");
     
     if (newBidAmount) {
-      // Update the bid amount in the sheet
-      updateRow("Bids", bidToUpdate.rowIndex, { 
-        bid_amount: newBidAmount,
-        timestamp: new Date()
-      });
+      // Update the bid amount in the sheet SAFELY
+      const bids = getSheetData("Bids");
+      const currentBid = bids.find(b => String(b.data.bid_id) === String(bidToUpdate.data.bid_id));
+      if (currentBid) {
+        updateRow("Bids", currentBid.rowIndex, { 
+          bid_amount: newBidAmount,
+          timestamp: new Date()
+        });
+      }
       
       Monitoring.recordEvent('BID_UPDATED_AFTER_EDIT', { 
         bid_id: bidToUpdate.data.bid_id,
@@ -43,11 +47,8 @@ function handleWallReplyEdit(payload) {
       // Potentially update the lot if this bid was the current highest
       updateLotAfterBidEdit(bidToUpdate.data.lot_id, newBidAmount);
     } else {
-      // If the edited comment is no longer a valid bid, mark it as invalid
-      updateRow("Bids", bidToUpdate.rowIndex, { 
-        bid_amount: 0, // Mark as invalid
-        status: "invalidated_by_edit"
-      });
+      // If the edited comment is no longer a valid bid, mark it as invalid SAFELY
+      updateBidStatus(bidToUpdate.data.bid_id, "invalidated_by_edit");
       
       Monitoring.recordEvent('BID_INVALIDATED_BY_EDIT', { 
         bid_id: bidToUpdate.data.bid_id,
@@ -77,11 +78,8 @@ function handleWallReplyDelete(payload) {
   const bidToDelete = bids.find(b => b.data.comment_id == commentId);
   
   if (bidToDelete) {
-    // Mark the bid as deleted rather than physically deleting it
-    updateRow("Bids", bidToDelete.rowIndex, { 
-      status: "deleted",
-      deleted_at: new Date()
-    });
+    // Mark the bid as deleted SAFELY
+    updateBidStatus(bidToDelete.data.bid_id, "deleted");
     
     Monitoring.recordEvent('BID_MARKED_AS_DELETED', { 
       bid_id: bidToDelete.data.bid_id,
@@ -186,21 +184,4 @@ function findLotByLotId(lotId) {
   const rows = getSheetData("Config");
   const match = rows.find(r => String(r.data.lot_id) === String(lotId));
   return match ? match.data : null;
-}
-
-/**
- * Extends the routeEvent function to handle edit and delete events
- */
-function extendRouteEvent(payload) {
-  switch (payload.type) {
-    case "wall_reply_edit":
-      handleWallReplyEdit(payload);
-      break;
-    case "wall_reply_delete":
-      handleWallReplyDelete(payload);
-      break;
-    default:
-      // Handle other events in the original routeEvent function
-      routeEvent(payload);
-  }
 }

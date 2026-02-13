@@ -11,6 +11,21 @@ function periodicSystemCheck() {
     // Process error buffer (EventQueue)
     processEventQueue();
 
+    // --- Auction Finalization Logic ---
+    const now = new Date();
+    // Assuming script timezone is Moscow (GMT+3).
+    const day = now.getDay(); // Sunday = 0, Saturday = 6
+    const hour = now.getHours(); // 0-23
+    
+    // On Saturday, from 21:00 to 21:59, run the finalization check.
+    // This covers the main 21:00 deadline and subsequent checks (e.g., 21:10)
+    // because the periodic check runs every 10 minutes.
+    if (day === 6 && hour === 21) {
+      logInfo('Periodic check is triggering finalizeAuction...', { time: now });
+      finalizeAuction();
+    }
+    // --- End of Auction Finalization Logic ---
+
     // Perform continuous monitoring
     const stats = continuousMonitoring();
     
@@ -115,9 +130,6 @@ function dailyMaintenance() {
     // Clean up old logs (older than 30 days)
     cleanupOldLogs();
     
-    // Clean up old statistics (older than 90 days)
-    cleanupOldStats();
-    
     // Check system health
     const results = systemHealthCheck();
     
@@ -155,7 +167,21 @@ function cleanupOldLogs() {
     const rowsToDelete = [];
     for (let i = values.length - 1; i >= 1; i--) { // Skip header row
       const dateStr = values[i][0]; // Assuming date is in first column
-      if (dateStr instanceof Date && dateStr < cutoffDate) {
+      
+      // Handle date strings or Date objects
+      let entryDate = dateStr;
+      if (typeof dateStr === 'string') {
+        // Try to parse "dd.MM.yyyy HH:mm:ss"
+        const parts = dateStr.split(' ');
+        if (parts.length >= 1) {
+          const dateParts = parts[0].split('.');
+          if (dateParts.length === 3) {
+            entryDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
+          }
+        }
+      }
+      
+      if (entryDate instanceof Date && entryDate < cutoffDate) {
         rowsToDelete.unshift(i + 1); // Convert to 1-indexed
       }
     }
@@ -177,49 +203,6 @@ function cleanupOldLogs() {
       error: error.message
     });
     Logger.log(`Ошибка при очистке логов: ${error.message}`);
-  }
-}
-
-/**
- * Cleans up old statistics entries
- */
-function cleanupOldStats() {
-  try {
-    const daysToKeep = 90;
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    
-    const statsSheet = getSheet("Statistics");
-    const values = statsSheet.getDataRange().getValues();
-    
-    if (values.length <= 1) return; // Only header row
-    
-    // Find rows to delete (starting from bottom to avoid index shifting)
-    const rowsToDelete = [];
-    for (let i = values.length - 1; i >= 1; i--) { // Skip header row
-      const dateStr = values[i][0]; // Assuming date is in first column
-      if (dateStr instanceof Date && dateStr < cutoffDate) {
-        rowsToDelete.unshift(i + 1); // Convert to 1-indexed
-      }
-    }
-    
-    // Delete rows
-    for (const rowIndex of rowsToDelete) {
-      statsSheet.deleteRow(rowIndex);
-    }
-    
-    if (rowsToDelete.length > 0) {
-      Monitoring.recordEvent('STATS_CLEANUP_PERFORMED', {
-        rowsDeleted: rowsToDelete.length,
-        cutoffDate: cutoffDate
-      });
-    }
-    
-  } catch (error) {
-    Monitoring.recordEvent('STATS_CLEANUP_ERROR', {
-      error: error.message
-    });
-    Logger.log(`Ошибка при очистке статистики: ${error.message}`);
   }
 }
 

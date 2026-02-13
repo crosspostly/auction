@@ -181,12 +181,8 @@ function setupCallbackServerAutomatic(url) {
   const props = PropertiesService.getScriptProperties();
   const adminToken = getVkToken(true);
 
-  let secret = props.getProperty("VK_SECRET");
-  if (!secret) {
-    secret = Utilities.getUuid();
-    props.setProperty("VK_SECRET", secret);
-    logInfo('Generated and saved a new VK_SECRET.');
-  }
+  props.deleteProperty("VK_SECRET"); // Clean up old unnecessary property
+  logInfo('VK_SECRET is no longer used. It has been removed from properties.');
 
   const code = getVkConfirmationCodeFromServer();
   // Код может не прийти сразу, если сервер ещё не подтвержден, но это не должно блокировать создание записи сервера
@@ -198,29 +194,23 @@ function setupCallbackServerAutomatic(url) {
   if (servers && servers.response && servers.response.items) {
       const existing = servers.response.items.find(s => s.url === url);
       if (existing) {
-          if (existing.status === 'failed') {
-              logInfo(`Found existing server with "failed" status (ID: ${existing.id}). Deleting it now...`);
-              callVk("groups.deleteCallbackServer", { group_id: groupId, server_id: String(existing.id) }, adminToken);
-              logInfo(`Server ID ${existing.id} deleted.`);
-              // Server ID is now null, so a new one will be created.
-          } else {
-              serverId = String(existing.id);
-              logInfo('Found existing callback server with "ok" status. ID: ' + serverId);
-          }
+          logInfo(`Found an existing server (ID: ${existing.id}, Status: ${existing.status}). Deleting it now.`);
+          callVk("groups.deleteCallbackServer", { group_id: groupId, server_id: String(existing.id) }, adminToken);
+          logInfo(`Old server deleted. Waiting 2 seconds before creating a new one to prevent race conditions.`);
+          Utilities.sleep(2000); // Add a 2-second delay
       }
   } else {
-      throw new Error('Не удалось получить список callback серверов от VK.');
+      logError('setupCallbackServerAutomatic', 'Could not retrieve callback server list from VK. Proceeding with creation attempt anyway.', servers);
   }
 
-  if (!serverId) {
-    logInfo('No active server found. Creating a new one...');
-    const res = callVk("groups.addCallbackServer", { group_id: groupId, url: String(url), title: "GAS_Auction_Bot", secret_key: secret }, adminToken);
-    if (res && res.response && res.response.server_id) {
-        serverId = String(res.response.server_id);
-        logInfo('Added new callback server with ID: ' + serverId);
-    } else {
-        throw new Error('Не удалось добавить новый callback сервер в VK. Ответ VK: ' + JSON.stringify(res));
-    }
+  logInfo('Attempting to create a new callback server without a secret key...');
+  const res = callVk("groups.addCallbackServer", { group_id: groupId, url: String(url), title: "AuctionBot" }, adminToken);
+  
+  if (res && res.response && res.response.server_id) {
+      serverId = String(res.response.server_id);
+      logInfo('Successfully added new callback server with ID: ' + serverId);
+  } else {
+      throw new Error('Не удалось добавить новый callback сервер в VK. Ответ VK: ' + JSON.stringify(res));
   }
 
   const eventSettings = { 
@@ -240,7 +230,7 @@ function setupCallbackServerAutomatic(url) {
       logError('setCallbackSettings', 'Failed to set callback settings.', setResult);
   }
 
-  return { serverId, code, secret };
+  return { serverId, code };
 }
 
 /**

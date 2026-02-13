@@ -1,27 +1,27 @@
 /**
  * @fileoverview Глобальный объект мониторинга.
- * Используем именованную функцию для гарантии инициализации (hoisting).
+ * Перенаправляет события системного мониторинга в общий Журнал.
  */
 
 /**
- * Записывает событие в лист "Статистика"
+ * Записывает событие мониторинга в общий Журнал
  * @param {string} type Тип события
  * @param {object|string} data Данные события
  */
 function recordMonitoringEvent(type, data) {
   try {
-    // Записываем в лист Журнал вместо Статистики
-    var timestamp = new Date();
     var dataString = (typeof data === 'object') ? JSON.stringify(data) : String(data);
     
-    // Используем существующую функцию log для записи в Журнал
+    // Записываем в Журнал под типом MONITORING
+    // Если дебаг-режим выключен, некоторые события мониторинга можно подавлять здесь,
+    // но сейчас мы пишем всё для обеспечения полной прослеживаемости.
     log("MONITORING", type, dataString);
   } catch (e) {
     console.error('Monitoring Error: ' + e.message);
   }
 }
 
-// Создаем глобальный объект-обертку для совместимости с существующим кодом
+// Глобальный объект для совместимости с кодом
 var Monitoring = {
   recordEvent: function(type, data) {
     recordMonitoringEvent(type, data);

@@ -1,37 +1,5 @@
 function doGet(e) {
-  // 1. Обработка запроса на запуск тестов (CI/CD)
-  if (e.parameter && e.parameter.action === 'run_tests') {
-    const secret = PropertiesService.getScriptProperties().getProperty('VK_SECRET');
-    // Если секрет еще не задан в свойствах, разрешаем запуск с дефолтным (для первого старта), но лучше требовать совпадение.
-    // Если e.parameter.secret совпадает с VK_SECRET
-    if (secret && e.parameter.secret === secret) {
-      try {
-        logInfo("🚀 Запуск полного тестового набора через веб-хук (CI/CD)...");
-        
-        // Run the complete test suite
-        const testReport = runCompleteTestSuite();
-        
-        // Check if all tests passed
-        const allPassed = testReport.includes("ALL TESTS PASSED") || 
-                         (testReport.includes("Failed: 0") && testReport.includes("✅"));
-        
-        if (allPassed) {
-          logInfo("CI_CD_ALL_TESTS_PASSED");
-          return ContentService.createTextOutput("✅ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО:\n\n" + testReport).setMimeType(ContentService.MimeType.TEXT);
-        } else {
-          logError("CI_CD_TEST_REPORTED_FAILURE", { report: testReport.substring(0, 500) });
-          return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n\n" + testReport).setMimeType(ContentService.MimeType.TEXT);
-        }
-      } catch (error) {
-        logError("CI_CD_TEST_FAILED", error);
-        return ContentService.createTextOutput("❌ ОШИБКА ТЕСТОВ:\n" + error.message + "\n\nStack:\n" + error.stack).setMimeType(ContentService.MimeType.TEXT);
-      }
-    } else {
-      return ContentService.createTextOutput("⛔ Доступ запрещен. Неверный secret.").setMimeType(ContentService.MimeType.TEXT);
-    }
-  }
-
-  // 2. Стандартная проверка доступности
+  // 1. Стандартная проверка доступности
   // Этот тест - главный способ проверить, что скрипт развернут правильно.
   // Откройте URL веб-приложения в режиме инкогнито.
   // Если вы видите этот текст - значит, URL рабочий и доступ есть у всех ("Anyone").
@@ -46,6 +14,12 @@ function doPost(e) {
   try {
     const rawPayload = e.postData.contents;
     const data = JSON.parse(rawPayload);
+
+    // Детальный лог только в режиме отладки
+    logDebug('📨 doPost incoming', {
+      type: data.type || "unknown",
+      group_id: data.group_id || ""
+    });
 
     // 1. Логируем входящее событие расширенно
     const logData = {
@@ -79,15 +53,18 @@ function doPost(e) {
       return ContentService.createTextOutput(String(codeToReturn || "").trim()).setMimeType(ContentService.MimeType.TEXT);
     }
 
-    // Мгновенная обработка события (новое требование)
+    // --- Alien Group Protection ---
+    // Ignore events from other groups to prevent error loops
+    const myGroupId = String(PropertiesService.getScriptProperties().getProperty("GROUP_ID") || "");
+    if (data.group_id && String(data.group_id) !== myGroupId) {
+      logInfo("🚫 Ignored event from alien group", { received_group_id: data.group_id, my_group_id: myGroupId, type: data.type });
+      return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
+    }
+    // --- End of Alien Group Protection ---
+
+    // Process the event in real-time. If it fails, it will be logged, but not retried.
     if (data.type) {
-      try {
-        routeEvent(data);
-      } catch (procError) {
-        // Если мгновенная обработка не удалась - ставим в очередь для ретрая
-        logError('doPost_processing_failed_retrying', procError, rawPayload);
-        enqueueEvent(rawPayload);
-      }
+      routeEvent(data);
     }
     
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
@@ -108,14 +85,60 @@ function onOpen() {
       .addItem('🏁 Завершить аукцион', 'finalizeAuction')
       .addItem('🔄 Пересоздать триггеры', 'setupTriggers')
       .addItem('🔍 Проверить триггеры', 'checkTriggers')
-      .addItem('🌐 Проверить Callback сервер VK', 'checkVkCallbackServer'))
-    .addSubMenu(ui.createMenu('🧪 Тестирование')
-      .addItem('✅ Запустить все тесты', 'runCompleteTestSuite')
-      .addItem('🚀 Полная симуляция', 'runFullCycleSimulation'))
+      .addItem('🌐 Проверить Callback сервер VK', 'checkVkCallbackServer')
+      .addSeparator()
+      .addItem('🧹 Очистить системные листы', 'clearSystemSheets'))
     .addToUi();
 }
 function showAllSheets() { toggleSystemSheets(false); }
 function hideSystemSheets() { toggleSystemSheets(true); }
+
+/**
+ * Clears the content of system sheets (Logs, EventQueue, NotificationQueue)
+ * after user confirmation, preserving the header row.
+ */
+function clearSystemSheets() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    'Подтверждение',
+    'Вы уверены, что хотите очистить все системные журналы и очереди (Logs, EventQueue, NotificationQueue, Incoming)? ' +
+    'Это действие необратимо.',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (response !== ui.Button.YES) {
+    ui.alert('Очистка отменена.');
+    return;
+  }
+
+  try {
+    const sheetsToClear = ['Logs', 'EventQueue', 'NotificationQueue', 'Incoming'];
+    let clearedCount = 0;
+
+    sheetsToClear.forEach(sheetName => {
+      try {
+        const sheet = getSheet(sheetName);
+        // Clear all data except the first row (header)
+        const lastRow = sheet.getLastRow();
+        if (lastRow > 1) {
+          sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+        }
+        clearedCount++;
+      } catch (e) {
+        logError(`clear_sheet_error`, e, { sheetName: sheetName });
+        // Continue to the next sheet even if one fails
+      }
+    });
+
+    logInfo(`System sheets cleared by user`, { sheets: sheetsToClear });
+    ui.alert('✅ Успех', `Очищено ${clearedCount} системных листов.`, ui.ButtonSet.OK);
+
+  } catch (error) {
+    logError('clearSystemSheets_critical', error);
+    ui.alert('❌ Ошибка', 'Произошла ошибка при очистке листов: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
 function runSetupWizard() {
   const ui = SpreadsheetApp.getUi();
   const response = ui.alert('Мастер настройки', 'Создать листы, заполнить настройки и включить триггеры?', ui.ButtonSet.YES_NO);
@@ -249,20 +272,6 @@ function connectBotToVk(form) {
     return `❌ ОШИБКА: ${e.message}`; 
   }
 }
-function diagnosticTest() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    const groupId = getVkGroupId();
-    const groupInfoResponse = callVk("groups.getById", { group_id: groupId });
-    const groupInfo = groupInfoResponse ? groupInfoResponse.response : null;
-    const mockEvent = { postData: { contents: JSON.stringify({ type: 'confirmation', group_id: groupId }) } };
-    const response = doPost(mockEvent);
-    const code = response.getContent();
-    ui.alert('Диагностика', `✅ ВК: "${groupInfo ? groupInfo[0].name : 'НЕ НАЙДЕНО'}"\n🤖 Код Handshake: "${code}"\n🚀 Сигнал отправлен в Журнал.`, ui.ButtonSet.OK);
-    handleWallPostNew({ type: "wall_post_new", object: { id: 999, owner_id: -groupId, text: "#аукцион\nТест\n№777\nСтарт 777" } });
-  } catch (e) { ui.alert('❌ Ошибка: ' + e.message); }
-}
-
 /**
  * Проверяет состояние триггеров
  */
@@ -393,94 +402,17 @@ function checkVkCallbackServer() {
   }
 }
 
-/**
- * Глубокая диагностика настроек Callback (вывод в лог)
- */
-function debugCallbackSettings() {
-  const groupId = getVkGroupId();
-  const webAppUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL');
-  
-  logInfo('🔍 Запуск глубокой диагностики Callback Settings', { groupId, webAppUrl });
-  
-  // Получаем список серверов
-  const servers = callVk('groups.getCallbackServers', { group_id: groupId });
-  
-  if (!servers || !servers.response || !servers.response.items) {
-    logError('debugCallbackSettings', 'Не удалось получить список серверов', servers);
-    return;
-  }
-  
-  const myServer = servers.response.items.find(s => s.url === webAppUrl);
-  
-  if (!myServer) {
-    logError('debugCallbackSettings', 'Наш сервер не найден в списке VK!');
-    return;
-  }
-  
-  logInfo(`✅ Сервер найден. ID: ${myServer.id}, Статус: ${myServer.status}`);
-  
-  // ПРЯМОЙ запрос настроек БЕЗ обёртки
-  const rawResponse = callVk('groups.getCallbackSettings', {
-    group_id: groupId,
-    server_id: myServer.id
-  }, getVkToken(true));
-  
-  logInfo('📦 RAW RESPONSE (getCallbackSettings):', rawResponse);
-  
-  // Теперь через нашу функцию
-  const parsed = getCallbackEventsStatus(groupId, myServer.id);
-  
-  if (parsed) {
-    logInfo('✅ Парсинг успешен', {
-      enabled: parsed.enabled.join(', '),
-      disabled: parsed.disabled.join(', ')
-    });
-  } else {
-    logError('debugCallbackSettings', 'getCallbackEventsStatus вернула null');
-  }
-}
-
-/**
- * Верификация исправления Callback API
- */
-function verifyCallbackFix() {
-  const groupId = getVkGroupId();
-  const servers = callVk('groups.getCallbackServers', { group_id: groupId });
-  
-  if (!servers?.response?.items?.length) {
-    Logger.log('❌ Нет серверов');
-    return;
-  }
-  
-  const myServer = servers.response.items[0];
-  
-  // Проверяем парсинг
-  const status = getCallbackEventsStatus(groupId, myServer.id);
-  
-  if (!status) {
-    Logger.log('❌ getCallbackEventsStatus вернула null');
-    return;
-  }
-  
-  Logger.log('✅ УСПЕХ! Состояние получено:');
-  Logger.log(`   Включено: ${status.enabled.length} событий`);
-  Logger.log(`   Выключено: ${status.disabled.length} событий`);
-  Logger.log(`   Список включенных: ${status.enabled.join(', ')}`);
-  
-  // Проверяем, что критичные события включены
-  const mustHave = ['wall_post_new', 'wall_reply_new', 'message_new'];
-  const missing = mustHave.filter(e => !status.enabled.includes(e));
-  
-  if (missing.length > 0) {
-    Logger.log(`⚠️ ВНИМАНИЕ! Не включены: ${missing.join(', ')}`);
-  } else {
-    Logger.log('✅ Все критичные события включены');
-  }
-}
-
 function routeEvent(payload) {
+  // --- Alien Group Protection (Secondary) ---
+  const myGroupId = String(PropertiesService.getScriptProperties().getProperty("GROUP_ID") || "");
+  if (payload.group_id && String(payload.group_id) !== myGroupId) {
+    logDebug('🚫 routeEvent: Ignored enqueued event from alien group', { received: payload.group_id, expected: myGroupId });
+    return; // Don't process enqueued garbage
+  }
+  // -------------------------------------------
+
   // ✅ Трассировка вызова (новое требование для диагностики)
-  logInfo('🎯 routeEvent called', { type: payload.type, hasObject: !!payload.object });
+  logDebug('🎯 routeEvent called', { type: payload.type, hasObject: !!payload.object });
 
   // Process the event (already recorded in enqueueEvent)
   switch (payload.type) {
@@ -991,12 +923,21 @@ function parseLotFromPost(postObject) {
     let deadline = null;
 
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    
+    // Test mode check (Once per post)
+    if (getSetting('test_mode_enabled') === 'ВКЛ') {
+      deadline = new Date(new Date().getTime() + 5 * 60 * 1000);
+      logInfo("🕒 РЕЖИМ ТЕСТИРОВАНИЯ ВКЛЮЧЕН. Дедлайн установлен на +5 минут.", { deadline });
+    }
+
     for (const line of lines) {
       const nameMatch = line.match(/^(?:Лот|🎁Лот)\s*[-—]?\s*(.+)/i);
       if (nameMatch) {
         name = nameMatch[1].trim();
         continue;
       }
+    
+    if (getSetting('test_mode_enabled') !== 'ВКЛ') {
       const deadlineMatch = line.match(/(?:Дедлайн|Дата окончания аукциона)\s*(\d{1,2}\.\d{1,2}\.\d{4})\s*в\s*(\d{1,2}:\d{2})\s*по МСК/i);
       if (deadlineMatch) {
         const [day, month, year] = deadlineMatch[1].split('.').map(Number);
@@ -1004,12 +945,15 @@ function parseLotFromPost(postObject) {
         deadline = new Date(year, month - 1, day, hours, minutes);
         continue;
       }
-      const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
-      if (priceMatch) {
-        startPrice = Number(priceMatch[1]);
-        if (priceMatch[2]) bidStep = Number(priceMatch[2]);
-        continue;
-      }
+    }
+
+    const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
+    if (priceMatch) {
+      startPrice = Number(priceMatch[1]);
+      if (priceMatch[2]) bidStep = Number(priceMatch[2]);
+      continue;
+    }
+    
     }
     
     let imageUrl = "";
@@ -1060,12 +1004,50 @@ function parseDeadline(text) {
   const timeMatch = text.match(/(\d{1,2})[:.](\d{2})/);
   return new Date(year, month, day, timeMatch ? Number(timeMatch[1]) : 21, timeMatch ? Number(timeMatch[2]) : 0);
 }
+// Helper to safely update bid status even if rows shifted
+function updateBidStatus(bidId, newStatus) {
+  const bids = getSheetData("Bids");
+  const match = bids.find(b => String(b.data.bid_id) === String(bidId));
+  if (match) {
+    updateRow("Bids", match.rowIndex, { status: newStatus });
+  } else {
+    logError("updateBidStatus", "Bid not found for update", { bidId, newStatus });
+  }
+}
+
+// Helper to safely parse a date string in "dd.MM.yyyy HH:mm:ss" format
+function parseRussianDate(dateString) {
+  if (!dateString || typeof dateString !== 'string') {
+    return null;
+  }
+  const parts = dateString.match(/(\d{2})\.(\d{2})\.(\d{4})\s*(\d{2}):(\d{2}):(\d{2})?/);
+  if (!parts) return null;
+  // new Date(year, monthIndex, day, hours, minutes, seconds)
+  return new Date(parts[3], parts[2] - 1, parts[1], parts[4] || 0, parts[5] || 0, parts[6] || 0);
+}
+
+
 function handleWallReplyNew(payload) {
   const comment = payload.object || {};
+
+  // --- HARD SELF-REPLY BLOCK ---
+  if (comment.from_id < 0) {
+    return; 
+  }
+  // -----------------------------
+
+  // --- Robust Deduplication using Sheets ---
+  if (isBidExists(comment.id)) {
+    logInfo("🚫 Duplicate comment event detected from Bids sheet, skipping.", { comment_id: comment.id, text: comment.text });
+    Monitoring.recordEvent('DUPLICATE_COMMENT_SKIPPED_FROM_SHEET', { comment_id: comment.id });
+    return; // Stop processing immediately
+  }
+  // --- End of Deduplication ---
+
   const ownerId = payload.group_id || getVkGroupId(); // Получаем group_id из payload или настройки
   
   // Enhanced debug log at the very start
-  logInfo('🎤 handleWallReplyNew received', {
+  logDebug('🎤 handleWallReplyNew received', {
     from_id: comment.from_id,
     text: comment.text,
     post_id: comment.post_id,
@@ -1089,34 +1071,21 @@ function handleWallReplyNew(payload) {
     from_id: comment.from_id 
   });
 
-  // --- Self-Reply Protection with Simulator Support ---
+  // --- Self-Reply Protection ---
   const groupId = getVkGroupId(); 
   const fromId = String(comment.from_id);
   
   if (fromId === `-${groupId}`) {
-    const bidAmount = parseBid(comment.text || "");
-    
-    if (!bidAmount) {
-      logDebug("🚫 Ignored self-reply (not a bid)", { text: comment.text });
-      return; 
-    }
-    logDebug("✅ Accepted self-reply (parsed as bid)", { text: comment.text, bid: bidAmount });
+    logDebug("🚫 Ignored self-reply (comment from bot).", { text: comment.text });
+    return;
   }
-  // ----------------------------------------------------
+  // --- End of Self-Reply Protection ---
 
   const lot = findLotByPostId(postKey);
   if (!lot) {
-    // ADDED: Detailed log for lot not found
-    Monitoring.recordEvent('HANDLE_WALL_REPLY_LOT_NOT_FOUND', { postKey: postKey, text: comment.text });
-    logInfo("❌ Lot NOT FOUND for postKey", { postKey: postKey });
-    // Попробуем найти лот по частичному совпадению (иногда post_id бывает без owner_id)
-    const cleanPostId = String(comment.post_id);
-    const lotByCleanId = getSheetData("Config").find(r => String(r.data.post_id).endsWith(`_${cleanPostId}`) || String(r.data.post_id) === cleanPostId);
-    if (lotByCleanId) {
-       logInfo("⚠️ Found lot by partial match!", { foundLot: lotByCleanId.data.lot_id, originalPostId: lotByCleanId.data.post_id });
-    } else {
-       logInfo("❌ Really no lot found even by partial match.");
-    }
+    // Тихо игнорируем, если это обычный пост (не аукцион)
+    // Мы логируем только если это явно был аукционный пост, но мы его не нашли в базе
+    logDebug("Comment on untracked post ignored.", { postKey });
     return;
   }
 
@@ -1196,18 +1165,26 @@ function handleWallReplyNew(payload) {
 
     // --- ОБРАБОТКА ВАЛИДНОЙ СТАВКИ ---
     
-    // 1. Находим текущую лидирующую ставку и помечаем её как перебитую
+    // 1. Находим текущую лидирующую ставку по ЭТОМУ ЛОТУ и ЭТОМУ ПОСТУ
+    // Это критично для правильных ответов (Reply)
     const bids = getSheetData("Bids");
-    const oldLeaderBid = bids.find(b => b.data.lot_id === currentLot.lot_id && b.data.status === "лидер");
+    const oldLeaderBid = bids.find(b => 
+      b.data.lot_id === currentLot.lot_id && 
+      extractIdFromFormula(b.data.post_id) === String(parsePostKey(postKey).postId) && // ОШИБКА БЫЛА ТУТ: нужен конкретный пост
+      b.data.status === "лидер"
+    );
+    
     if (oldLeaderBid) {
-      updateRow("Bids", oldLeaderBid.rowIndex, { status: "перебита" });
+      // Используем БЕЗОПАСНОЕ обновление по ID, так как индексы могли съехать
+      updateBidStatus(oldLeaderBid.data.bid_id, "перебита");
     }
 
     // 2. Записываем новую ставку как лидера
-    logInfo(`💾 Recording Valid Bid: ${bid}`);
+    logDebug(`💾 Recording Valid Bid: ${bid}`);
     appendRow("Bids", {
       bid_id: Utilities.getUuid(),
       lot_id: currentLot.lot_id,
+      post_id: parsePostKey(postKey).postId, // Обязательно сохраняем ID поста для истории
       user_id: userId,
       bid_amount: bid,
       timestamp: new Date(),
@@ -1216,7 +1193,7 @@ function handleWallReplyNew(payload) {
     });
     
     updateLot(currentLot.lot_id, { current_price: bid, leader_id: userId });
-    logInfo(`✅ Lot Updated: ${currentLot.lot_id} -> ${bid}`);
+    logDebug(`✅ Lot Updated: ${currentLot.lot_id} -> ${bid}`);
     
     // ... (extension logic) ...
     const AUCTION_EXTENSION_WINDOW_MINUTES = 10;
@@ -1238,17 +1215,40 @@ function handleWallReplyNew(payload) {
     if (oldLeaderBid) {
       // Отправляем уведомление в комментарий (по умолчанию)
       if (true) { // Всегда отправляем в комментарий как основное уведомление
-        const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid, post_id: postKey });
+        const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid });
         try {
+          let replySuccess = false;
+          let errorResponse = null;
+
           if (oldLeaderBid.data.comment_id) {
-            replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
-            // Помечаем в таблице, что ответ успешно отправлен
-            updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
-            logInfo(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке`);
+            const replyResult = replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
+            if (replyResult && !replyResult.error) {
+              replySuccess = true;
+            } else {
+              errorResponse = replyResult;
+            }
+          }
+
+          if (replySuccess) {
+            updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен");
+            logDebug(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке`);
           } else {
-            postCommentToLot(parsePostKey(postKey).postId, `[id${oldLeaderBid.data.user_id}|${getUserName(oldLeaderBid.data.user_id)}], ${outbidCommentMessage}`);
-            updateRow("Bids", oldLeaderBid.rowIndex, { status: "уведомлен" });
-            logInfo(`💬 Упомянул пользователя ${oldLeaderBid.data.user_id} о перебитой ставке`);
+            // Анализируем ошибку
+            const errorCode = errorResponse?.error?.error_code;
+            const errorMsg = errorResponse?.error?.error_msg || "Unknown error";
+            
+            logDebug(`⚠️ Ошибка при ответе на комментарий ${oldLeaderBid.data.comment_id}: [${errorCode}] ${errorMsg}`);
+
+            // Фоллбэк ТОЛЬКО если комментарий не найден (код 100), доступ запрещен (код 15)
+            // или родительский комментарий удален (код 10 - Internal server error: parent deleted)
+            if (errorCode === 100 || errorCode === 15 || errorCode === 10) {
+               logInfo(`🔄 Запускаю фоллбэк: публикация нового комментария с упоминанием.`);
+               const fallbackMessage = `[id${oldLeaderBid.data.user_id}|${getUserName(oldLeaderBid.data.user_id)}], ${outbidCommentMessage}`;
+               postCommentToLot(parsePostKey(postKey).postId, fallbackMessage);
+               updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен (фоллбэк)");
+            } else {
+               logInfo(`❌ Фоллбэк пропущен. Ошибка не критична для переотправки или требует внимания.`);
+            }
           }
         } catch (e) {
           logError("reply_outbid", e);
@@ -1271,37 +1271,66 @@ function parseBid(text) {
   return match ? Number(match[1]) : null;
 }
 function validateBid(bid, lot) {
-  if (lot.deadline && new Date() > new Date(lot.deadline)) {
-    return { isValid: false, reason: "Увы, этот аукцион уже завершен! 😔" };
+  const deadlineDate = parseRussianDate(lot.deadline);
+  if (deadlineDate && new Date() > deadlineDate) {
+    return { isValid: false, reason: buildAuctionFinishedMessage({ lot_name: lot.name }) };
   }
   
   const settings = getSettings();
   
   // Проверка максимальной ставки
   if (settings.max_bid && bid > settings.max_bid) {
-    return { isValid: false, reason: `Ого! Такая ставка превышает наш максимум (${settings.max_bid}₽). Проверь сумму, пожалуйста! 😉` };
+    return { isValid: false, reason: buildMaxBidExceededMessage({ your_bid: bid, max_bid: settings.max_bid }) };
   }
   
   // Проверка минимальной ставки
   const currentPrice = Number(lot.current_price || lot.start_price || 0);
-  const minBidIncrement = settings.min_bid_increment !== undefined && settings.min_bid_increment !== "" ? Number(settings.min_bid_increment) : 50;
-  const minimumRequiredBid = currentPrice + minBidIncrement;
+  const startPrice = Number(lot.start_price || 0);
   
-  if (bid < minimumRequiredBid) {
-    return { isValid: false, reason: `Твоя ставка чуть маловата. Нужно предложить хотя бы ${minimumRequiredBid}₽ (текущая цена ${currentPrice}₽ + шаг ${minBidIncrement}₽). Удачи! 🍀` };
+  // --- НОВАЯ ЛОГИКА ---
+  // Если это самая первая ставка (текущая цена равна стартовой),
+  // то ставка должна быть БОЛЬШЕ ИЛИ РАВНА стартовой.
+  if (currentPrice === startPrice) {
+    if (bid < startPrice) {
+      return { isValid: false, reason: `Первая ставка не может быть меньше стартовой цены (${startPrice}₽).` };
+    }
+  } else {
+    // Для всех последующих ставок логика прежняя: ставка должна быть выше текущей + шаг.
+    const minBidIncrement = settings.min_bid_increment !== undefined && settings.min_bid_increment !== "" ? Number(settings.min_bid_increment) : 50;
+    const minimumRequiredBid = currentPrice + minBidIncrement;
+    
+    if (bid < minimumRequiredBid) {
+      return { 
+        isValid: false, 
+        reason: buildLowBidMessage({ 
+          your_bid: bid, 
+          lot_name: lot.name, 
+          current_bid: currentPrice 
+        }) 
+      };
+    }
   }
-  
-  // Проверка шага ставки
+  // --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
+  // Проверка шага ставки (остается без изменений)
   if (getSetting('bid_step_enabled') === 'ВКЛ') {
     const bidStep = settings.bid_step !== undefined && settings.bid_step !== "" ? Number(settings.bid_step) : 50;
     
     // Проверяем, что ставка кратна шагу
     // Формула: (ставка - стартовая цена) должна быть кратна шагу ставки
-    const priceDiff = bid - Number(lot.start_price);
+    const priceDiff = bid - startPrice;
     const remainder = priceDiff % bidStep;
     
     if (remainder !== 0) {
-      return { isValid: false, reason: `Ставка должна быть кратна шагу ${bidStep}₽. Например: ${currentPrice + bidStep}₽, ${currentPrice + bidStep*2}₽ и так далее. Попробуй еще раз! ✨` };
+      return { 
+        isValid: false, 
+        reason: buildInvalidStepMessage({ 
+          your_bid: bid, 
+          bid_step: bidStep, 
+          example_bid: currentPrice + bidStep, 
+          example_bid2: currentPrice + bidStep * 2 
+        }) 
+      };
     }
   }
   
@@ -1325,7 +1354,7 @@ function enhancedValidateBid(bid, lot, userId) {
     if (!isSubscribed) {
       return {
         isValid: false,
-        reason: 'Чтобы твоя ставка была принята, нужно сначала подписаться на нашу группу. Подпишись и возвращайся! 📢'
+        reason: buildSubscriptionRequiredMessage({ lot_name: lot.name })
       };
     }
   }
@@ -1379,10 +1408,11 @@ function buildOutbidMessage(p) {
     lot_name: p.lot_name,
     new_bid: p.new_bid
   });
-  return template
+  // The {post_id} placeholder is intentionally removed from the template to avoid spamming links.
+  const cleanTemplate = template.replace(/{post_id}/g, '');
+  return cleanTemplate
     .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')
-    .replace(/{new_bid}/g, p.new_bid || '0')
-    .replace(/{post_id}/g, p.post_id || '');
+    .replace(/{new_bid}/g, p.new_bid || '0');
 }
 
 function buildWinnerMessage(p) {
@@ -1443,6 +1473,31 @@ function buildSubscriptionRequiredMessage(p) {
   return template
     .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')
     .replace(/{post_id}/g, p.post_id || '');
+}
+
+function buildInvalidStepMessage(p) {
+  const settings = getSettings();
+  const template = settings.invalid_step_template || "Ошибка: шаблон не найден в Настройках.";
+  return template
+    .replace(/{your_bid}/g, p.your_bid || '0')
+    .replace(/{bid_step}/g, p.bid_step || '0')
+    .replace(/{example_bid}/g, p.example_bid || '0')
+    .replace(/{example_bid2}/g, p.example_bid2 || '0');
+}
+
+function buildMaxBidExceededMessage(p) {
+  const settings = getSettings();
+  const template = settings.max_bid_exceeded_template || "Ошибка: шаблон не найден в Настройках.";
+  return template
+    .replace(/{your_bid}/g, p.your_bid || '0')
+    .replace(/{max_bid}/g, p.max_bid || '0');
+}
+
+function buildAuctionFinishedMessage(p) {
+  const settings = getSettings();
+  const template = settings.auction_finished_template || "Ошибка: шаблон не найден в Настройках.";
+  return template
+    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот');
 }
 
 function buildWinnerCommentMessage(p) {
@@ -1611,11 +1666,16 @@ function finalizeAuction() {
 
       Monitoring.recordEvent('WINNER_DECLARED', newOrder);
     }
+    Utilities.sleep(1000); // Пауза 1 секунда между обработкой лотов
   });
 
   if (allWinnersDataForReport.length > 0) {
     sendAdminReport(allWinnersDataForReport);
   }
+
+  // 🔥 МГНОВЕННАЯ ОТПРАВКА: Не ждем 5-минутного триггера
+  logInfo("🚀 Принудительный запуск очереди уведомлений после завершения аукциона");
+  processNotificationQueue();
 }
 
 /**
@@ -1670,6 +1730,7 @@ function sendAdminReport(winners) {
       }
     });
     logInfo(`Отчет по победителю ${winnerId} отправлен администраторам.`);
+    Utilities.sleep(500); // Пауза 0.5 секунды между отправкой сводок по разным победителям
   });
 
   Monitoring.recordEvent('ADMIN_REPORTS_SENT', { recipient_ids: adminIds, winner_count: uniqueWinnerIds.length });
@@ -1686,9 +1747,6 @@ function setupTriggers() {
   // Trigger for processing the notification queue every 5 minutes (GAS limitation)
   ScriptApp.newTrigger("processNotificationQueue").timeBased().everyMinutes(5).create();
 
-  // Trigger for finalizing the auction on a schedule
-  ScriptApp.newTrigger("finalizeAuction").timeBased().onWeekDay(ScriptApp.WeekDay.SATURDAY).atHour(21).create();
-  
   // Trigger for processing admin replies to messages every 10 minutes
   ScriptApp.newTrigger("processAdminReplies").timeBased().everyMinutes(10).create();
   
@@ -1730,55 +1788,6 @@ function parsePostKey(postKey) {
 /**
  * Cleans up old log entries
  */
-function cleanupOldLogs() {
-  try {
-    const daysToKeep = 30;
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    
-    const logSheet = getSheet("Logs");
-    const values = logSheet.getDataRange().getValues();
-    
-    if (values.length <= 1) return; // Only header row
-    
-    // Find rows to delete (starting from bottom to avoid index shifting)
-    const rowsToDelete = [];
-    for (let i = values.length - 1; i >= 1; i--) { // Skip header row
-      const dateStr = values[i][0]; // Assuming date is in first column
-      if (dateStr instanceof Date && dateStr < cutoffDate) {
-        rowsToDelete.unshift(i + 1); // Convert to 1-indexed
-      }
-    }
-    
-    // Delete rows
-    for (const rowIndex of rowsToDelete) {
-      logSheet.deleteRow(rowIndex);
-    }
-    
-    if (rowsToDelete.length > 0) {
-      Monitoring.recordEvent('LOG_CLEANUP_PERFORMED', {
-        rowsDeleted: rowsToDelete.length,
-        cutoffDate: cutoffDate
-      });
-    }
-    
-  } catch (error) {
-    Monitoring.recordEvent('LOG_CLEANUP_ERROR', {
-      error: error.message
-    });
-    Logger.log(`Ошибка при очистке логов: ${error.message}`);
-  }
-}
-
-/**
- * Cleans up old statistics entries
- * Now cleans up old logs since Statistics was merged with Logs
- */
-function cleanupOldStats() {
-  // Now handled by cleanupOldLogs() since Statistics was merged with Logs
-  cleanupOldLogs();
-}
-
 // Вспомогательная функция для тестового фреймворка
 function getSetting(key) {
   const settings = getSettings();
@@ -2135,126 +2144,10 @@ function generateHealthSummary(results) {
 /**
  * Automatic system repair function that fixes common issues
  */
-function autoRepairSystem() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.alert(
-    'Автоматический ремонт системы', 
-    'Выполнить автоматический ремонт обнаруженных проблем?', 
-    ui.ButtonSet.YES_NO
-  );
-  
-  if (response !== ui.Button.YES) return;
-  
-  try {
-    // Run health check first
-    const results = systemHealthCheck();
-    
-    // Apply fixes for failed checks that have automatic solutions
-    for (const result of results) {
-      if (!result.passed && result.action && result.data) {
-        switch (result.action) {
-          case 'createMissingSheets':
-            createMissingSheets(result.data);
-            break;
-            
-          case 'recreateMissingTriggers':
-            recreateMissingTriggers(result.data);
-            break;
-            
-          case 'cleanupStuckEvents':
-            // For stuck events, we'll just log them for manual review
-            Logger.log(`Найдены застрявшие события: ${JSON.stringify(result.data)}`);
-            break;
-            
-          case 'cleanupStuckNotifications':
-            // For stuck notifications, we'll just log them for manual review
-            Logger.log(`Найдены застрявшие уведомления: ${JSON.stringify(result.data)}`);
-            break;
-            
-          default:
-            Logger.log(`Неизвестное действие для автоматического ремонта: ${result.action}`);
-        }
-      }
-    }
-    
-    ui.alert('Ремонт завершен', 'Автоматический ремонт завершен. Проверьте логи для деталей.', ui.ButtonSet.OK);
-    
-  } catch (error) {
-    const errorMsg = `Ошибка при автоматическом ремонте: ${error.message}`;
-    Logger.log(errorMsg);
-    ui.alert('Ошибка', errorMsg, ui.ButtonSet.OK);
-  }
-}
-
-// Тестовая функция для VK API
-function testVkConnection() {
-  const ui = SpreadsheetApp.getUi();
-  const results = [];
-  try {
-    // Получаем настройки
-    const settings = getSettings();
-    const groupId = getVkGroupId();
-    const webAppUrl = settings.WEB_APP_URL; // Строго из настроек
-    
-    if (!webAppUrl) {
-       results.push('❌ ОШИБКА: WEB_APP_URL не найден в свойствах скрипта. Выполните настройку.');
-    }
-    
-    // 1. Проверка информации о группе
-    let groupInfo;
-    try {
-      groupInfo = callVk('groups.getById', { group_id: groupId });
-      if (groupInfo && groupInfo.response && groupInfo.response.length > 0) {
-        results.push('✅ Группа: ' + groupInfo.response[0].name);
-      } else if (groupInfo && groupInfo.response && groupInfo.response.length === 0) {
-        results.push('❌ Группа с ID ' + groupId + ' не найдена.');
-      } else if (groupInfo && groupInfo.error) {
-        results.push('❌ Ошибка группы: ' + groupInfo.error.error_msg);
-      } else {
-        results.push('❌ Нет ответа от VK API при запросе информации о группе.');
-      }
-    } catch (e) {
-      results.push('❌ Исключение при проверке группы: ' + e.message);
-      logError('testVkConnection_groupInfo', e);
-    }
-
-    // 2. Проверка Callback серверов
-    results.push('\n--- Проверка Callback Сервера ---');
-    results.push('ℹ️ URL в настройках: ' + webAppUrl);
-    let servers;
-    try {
-      servers = callVk('groups.getCallbackServers', { group_id: groupId });
-      if (servers && servers.response && servers.response.items) {
-        results.push('📡 Всего серверов в ВК: ' + servers.response.count);
-        const myServer = servers.response.items.find(s => s.url === webAppUrl);
-        if (myServer) {
-          results.push('✅ Ваш сервер НАЙДЕН в списке VK!');
-          results.push('  Статус: ' + myServer.status);
-        } else {
-          results.push('❌ ВНИМАНИЕ: URL из настроек НЕ НАЙДЕН среди серверов ВК!');
-        }
-      } else {
-        results.push('⚠️ Не удалось получить список серверов от ВК.');
-      }
-    } catch (e) {
-      results.push('❌ Исключение при проверке серверов: ' + e.message);
-      logError('testVkConnection_servers', e);
-    }
-
-    // 3. Проверка токена
-    results.push('\n--- Проверка токена ---');
-    if (settings.VK_TOKEN) {
-      results.push('✅ Токен установлен');
-    } else {
-      results.push('❌ Токен НЕ установлен');
-    }
-    ui.alert('Результаты тестирования:\n\n' + results.join('\n'));
-  } catch (e) {
-    ui.alert('❌ Критическая ошибка теста:\n' + e.message + '\n\n' + results.join('\n'));
-    logError('testVkConnection', e, results);
-  }
-}
-
+/**
+ * Adds an event to the EventQueue for asynchronous processing.
+ * @param {string} payload - The raw JSON payload from VK API.
+ */
 /**
  * Adds an event to the EventQueue for asynchronous processing.
  * @param {string} payload - The raw JSON payload from VK API.
