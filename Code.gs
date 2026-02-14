@@ -764,8 +764,25 @@ function handleMessageNew(payload) {
         if (!summaryMessage.startsWith("У вас нет")) {
           Monitoring.recordEvent('USER_SUMMARY_SENT', { userId: userId });
         }
-        return; // Завершаем выполнение, так как это была команда
+        return; 
     }
+
+    // --- НОВАЯ КОМАНДА: КОПИТЬ ---
+    if (lowerCaseText === 'копить') {
+        logInfo("handleMessageNew: 'КОПИТЬ' command received.", {userId: userId});
+        const allUsers = getSheetData("Users");
+        const userRow = allUsers.find(u => String(u.data.user_id) === userId);
+
+        if (userRow) {
+            updateRow("Users", userRow.rowIndex, { shipping_status: "Накопление" });
+            sendMessage(userId, "✅ Принято! Ваш статус изменен на «Накопление». Ваши выигранные лоты будут храниться у нас до тех пор, пока вы не запросите отправку.");
+            Monitoring.recordEvent('USER_STATUS_ACCUMULATE', { userId: userId });
+        } else {
+            sendMessage(userId, "У вас пока нет выигранных лотов, чтобы начать накопление. 😉");
+        }
+        return;
+    }
+    // --- КОНЕЦ КОМАНДЫ КОПИТЬ ---
 
     // Если кодового слова нет, пытаемся распознать данные для доставки.
     const allOrders = getSheetData("Orders");
@@ -1611,7 +1628,7 @@ function finalizeAuction() {
           last_win_date: new Date(),
           total_lots_won: 1,
           total_lots_paid: 0,
-          shipping_status: 'accumulating',
+          shipping_status: 'Готов к отправке', // Статус по умолчанию
           shipping_details: ''
         };
         appendRow("Users", newUser);
@@ -1692,21 +1709,14 @@ function sendAdminReport(winners) {
   const settings = getSettings();
   let adminIdsValue = settings.ADMIN_IDS;
   
-  // Проверяем, что adminIdsValue существует и преобразуем к строке
+  logDebug("sendAdminReport: Starting", { winner_count: winners.length, admin_ids_raw: adminIdsValue });
+
   if (!adminIdsValue) {
     logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны в настройках.");
     return;
   }
   
-  // Преобразуем к строке, если это не строка
-  const adminIdsString = String(adminIdsValue);
-  
-  if (adminIdsString.trim() === "") {
-    logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты.");
-    return;
-  }
-  
-  const adminIds = adminIdsString.split(',').map(id => id.trim()).filter(id => id);
+  const adminIds = String(adminIdsValue).split(',').map(id => id.trim()).filter(id => id);
   if (adminIds.length === 0) {
     logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
     return;
@@ -1714,29 +1724,37 @@ function sendAdminReport(winners) {
 
   // Находим уникальных победителей
   const uniqueWinnerIds = [...new Set(winners.map(w => w.winner_id))];
+  logDebug("sendAdminReport: Processing unique winners", { count: uniqueWinnerIds.length, ids: uniqueWinnerIds });
 
-  // Для каждого уникального победителя формируем и отправляем отдельное сообщение
   uniqueWinnerIds.forEach(winnerId => {
     const userSummary = buildUserOrderSummary(winnerId);
-    
-    // Пропускаем, если у пользователя почему-то нет неоплаченных лотов (например, уже оплатил)
-    if (userSummary.startsWith("У вас нет")) return;
-
-    // Получаем имя пользователя (предполагается, что где-то есть функция getUserName)
     const winnerName = getUserName(winnerId); 
-    const adminHeader = `⬇️ Сообщение для [id${winnerId}|${winnerName}] (готово к пересылке) ⬇️`;
-    const finalMessageForAdmin = `${adminHeader}\n\n${userSummary}`;
+    
+    let finalMessageForAdmin = "";
+    
+    if (userSummary.startsWith("У вас нет")) {
+      // ФОЛЛБЭК: Если сводка пуста, шлем краткое инфо, чтобы админ знал о факте продажи
+      logInfo(`⚠️ Сводка для ${winnerId} пуста, отправляю краткое уведомление.`);
+      finalMessageForAdmin = `⚠️ Лот продан пользователю [id${winnerId}|${winnerName}], но сводка заказов пуста.\n\nПроверьте листы "Лоты" и "Заказы" вручную.`;
+    } else {
+      const adminHeader = `⬇️ Сообщение для [id${winnerId}|${winnerName}] (готово к пересылке) ⬇️`;
+      finalMessageForAdmin = `${adminHeader}\n\n${userSummary}`;
+    }
 
-    // Отправляем это персональное сообщение каждому администратору
+    // Отправляем сообщение каждому администратору
     adminIds.forEach(adminId => {
       try {
-        sendMessage(adminId, finalMessageForAdmin);
+        logDebug(`sendAdminReport: Attempting to send to admin ${adminId}`, { text_length: finalMessageForAdmin.length });
+        const res = sendMessage(adminId, finalMessageForAdmin);
+        if (res && res.error) {
+          logError('sendAdminReport_vk_error', res.error.error_msg, { adminId: adminId });
+        }
       } catch (e) {
         logError('sendAdminReport_send_failed', e, { adminId: adminId, winnerId: winnerId });
       }
     });
-    logInfo(`Отчет по победителю ${winnerId} отправлен администраторам.`);
-    Utilities.sleep(500); // Пауза 0.5 секунды между отправкой сводок по разным победителям
+    
+    Utilities.sleep(500); 
   });
 
   Monitoring.recordEvent('ADMIN_REPORTS_SENT', { recipient_ids: adminIds, winner_count: uniqueWinnerIds.length });
