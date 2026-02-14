@@ -2,6 +2,7 @@
  * Скрипт для тестирования финализации аукциона.
  * Эмулирует ситуацию "Аукцион закончился 5 минут назад, есть победитель".
  */
+console.log("TestFinalization loaded");
 
 function runFinalizationTest() {
   const ui = SpreadsheetApp.getUi();
