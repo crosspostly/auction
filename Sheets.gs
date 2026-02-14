@@ -3,7 +3,6 @@ const SHEETS = {
   Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "post_id", "user_id", "bid_amount", "timestamp", "comment_id", "status"] },
   Users: { name: "Пользователи", headers: ["user_id", "user_name", "first_win_date", "last_win_date", "total_lots_won", "total_lots_paid", "shipping_status", "shipping_details"] },
   Orders: { name: "Заказы", headers: ["order_id", "lot_id", "lot_name", "post_id", "user_id", "win_date", "win_price", "status", "shipping_batch_id"] },
-  Winners: { name: "Победители", headers: ["winner_id", "lot_id", "win_price", "status"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },

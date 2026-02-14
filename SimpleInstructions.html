@@ -249,22 +249,7 @@
       <tr><td>status</td><td>Статус заказа (unpaid, paid, shipped)</td></tr>
     </table>
 
-    <h3>5. Лист "Победители" (Winners)</h3>
-    <p>Итоговый список после завершения аукциона.</p>
-    <table class="desc-table">
-      <tr><th>Поле</th><th>Описание</th></tr>
-      <tr><td>status</td><td>
-        <b>pending_contact</b>: Ждем "АУКЦИОН" в ЛС<br>
-        <b>summary_sent</b>: Счет отправлен<br>
-        <b>paid</b>: Оплачено (ставит админ)<br>
-        <b>shipped</b>: Отправлено
-      </td></tr>
-      <tr><td>delivery</td><td>Стоимость доставки (рассчитывается ботом)</td></tr>
-      <tr><td>paid</td><td>Статус оплаты</td></tr>
-      <tr><td>shipped</td><td>Статус отправки</td></tr>
-    </table>
-
-    <h3>6. Лист "Настройки"</h3>
+    <h3>5. Лист "Настройки"</h3>
     <p>Публичные настройки бота, которые можно менять. Новые настройки-переключатели подсвечиваются цветом (зеленый - ВКЛ, красный - ВЫКЛ).</p>
     <table class="desc-table">
       <tr><th>Поле</th><th>Описание</th></tr>
@@ -285,7 +270,7 @@
       <tr><td>send_winner_dm_enabled</td><td><b>ВКЛ/ВЫКЛ:</b> Отправлять победителю сообщение в ЛС</td></tr>
     </table>
 
-    <h3>7. Лист "Очередь Событий" (EventQueue)</h3>
+    <h3>6. Лист "Очередь Событий" (EventQueue)</h3>
     <p>Буфер для всех входящих событий от VK. Сюда попадают все комментарии и новые посты перед обработкой.</p>
     <table class="desc-table">
       <tr><th>Поле</th><th>Описание</th></tr>
@@ -294,7 +279,7 @@
       <tr><td>status</td><td>Статус обработки (pending, processed, failed)</td></tr>
     </table>
 
-    <h3>8. Лист "Очередь" (NotificationQueue)</h3>
+    <h3>7. Лист "Очередь" (NotificationQueue)</h3>
     <p>Сообщения, ожидающие отправки участникам.</p>
     <table class="desc-table">
       <tr><th>Поле</th><th>Описание</th></tr>
@@ -303,7 +288,7 @@
       <tr><td>payload</td><td>Данные для уведомления</td></tr>
     </table>
 
-    <h3>9. Лист "Журнал" (Logs)</h3>
+    <h3>8. Лист "Журнал" (Logs)</h3>
     <p>Подробный журнал работы бота.</p>
     <table class="desc-table">
       <tr><th>Поле</th><th>Описание</th></tr>
