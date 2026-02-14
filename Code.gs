@@ -1196,17 +1196,24 @@ function handleWallReplyNew(payload) {
     logDebug(`✅ Lot Updated: ${currentLot.lot_id} -> ${bid}`);
     
     // ... (extension logic) ...
-    const AUCTION_EXTENSION_WINDOW_MINUTES = 10;
-    const AUCTION_EXTENSION_DURATION_MINUTES = 10;
-    if (currentLot.deadline) {
-      const now = new Date();
-      const deadlineTime = new Date(currentLot.deadline);
-      const timeUntilDeadline = (deadlineTime.getTime() - now.getTime()) / (1000 * 60);
-      if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > 0) {
-        const newDeadline = new Date(deadlineTime.getTime() + AUCTION_EXTENSION_DURATION_MINUTES * 60 * 1000);
-        updateLot(currentLot.lot_id, { deadline: newDeadline });
-        logInfo(`Аукцион продлен до ${newDeadline.toLocaleString()}`);
+    const isTestMode = getSetting('test_mode_enabled') === 'ВКЛ';
+    if (!isTestMode) {
+      const AUCTION_EXTENSION_WINDOW_MINUTES = 10;
+      const AUCTION_EXTENSION_DURATION_MINUTES = 10;
+      if (currentLot.deadline) {
+        const now = new Date();
+        const deadlineTime = new Date(currentLot.deadline);
+        const timeUntilDeadline = (deadlineTime.getTime() - now.getTime()) / (1000 * 60);
+        if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > 0) {
+          const newDeadline = new Date(deadlineTime.getTime() + AUCTION_EXTENSION_DURATION_MINUTES * 60 * 1000);
+          updateLot(currentLot.lot_id, { deadline: newDeadline });
+          logInfo(`Аукцион продлен до ${newDeadline.toLocaleString()}`);
+          Monitoring.recordEvent('AUCTION_EXTENDED', { lot_id: currentLot.lot_id, new_deadline: newDeadline });
+        }
       }
+    } else {
+      logInfo('Продление аукциона пропущено (включен тестовый режим)');
+      Monitoring.recordEvent('AUCTION_EXTENSION_SKIPPED_TEST_MODE', { lot_id: currentLot.lot_id });
     }
 
     // 3. Отправляем ответ перебитому пользователю
@@ -1560,7 +1567,7 @@ function checkUserSubscription(userId) {
 }
 
 function finalizeAuction() {
-  const activeLots = getSheetData("Config").filter(row => row.data.status === "active" && new Date(row.data.deadline) < new Date());
+  const activeLots = getSheetData("Config").filter(row => row.data.status === "active" && parseRussianDate(row.data.deadline) < new Date());
   Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
 
   const allWinnersDataForReport = [];
