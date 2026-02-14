@@ -82,7 +82,6 @@ function onOpen() {
     .addItem('📖 Инструкция', 'showInstructions')
     .addSeparator()
     .addSubMenu(ui.createMenu('🛠️ Управление')
-      .addItem('🏁 Завершить аукцион', 'finalizeAuction')
       .addItem('🔄 Пересоздать триггеры', 'setupTriggers')
       .addItem('🔍 Проверить триггеры', 'checkTriggers')
       .addItem('🌐 Проверить Callback сервер VK', 'checkVkCallbackServer')
@@ -673,7 +672,7 @@ function parseLotIdsFromText(text) {
 }
 
 /**
- * Update user payment statistics
+ * Update user payment history
  * @param {string} userId - User ID
  * @param {number} paidCount - Number of newly paid orders
  */
