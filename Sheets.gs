@@ -48,7 +48,7 @@ const ORDER_HEADERS_DESCRIPTIONS = {
   user_id: "ID пользователя, выигравшего лот.",
   win_date: "Дата выигрыша лота.",
   win_price: "Цена выигрыша лота.",
-  status: "Статус оплаты заказа (unpaid, paid, abandoned).",
+  status: "Статус оплаты заказа (Ожидает оплаты, Оплачено, Отправлено).",
   shipping_batch_id: "ID партии доставки, если лот отправлен."
 };
 
@@ -562,10 +562,10 @@ function setupOrdersConditionalFormatting() {
   const newRules = rules.filter(rule => rule.getRanges()[0].getA1Notation() !== range.getA1Notation());
 
   const statusColors = {
-    "paid": "#d9ead3",    // Зеленый
-    "unpaid": "#f4cccc",  // Красный
-    "shipped": "#cfe2f3", // Синий
-    "accumulating": "#fff2cc" // Желтый (если используется)
+    "Оплачено": "#d9ead3",        // Зеленый
+    "Ожидает оплаты": "#f4cccc",  // Красный
+    "Отправлено": "#cfe2f3",      // Синий
+    "Накопление": "#fff2cc"       // Желтый
   };
 
   for (const [status, color] of Object.entries(statusColors)) {

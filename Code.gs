@@ -432,7 +432,7 @@ function routeEvent(payload) {
 function buildUserOrderSummary(userId) {
   const settings = getSettings();
   const allOrders = getSheetData("Orders");
-  const userOrders = allOrders.filter(o => String(o.data.user_id) === String(userId) && o.data.status === 'unpaid');
+  const userOrders = allOrders.filter(o => String(o.data.user_id) === String(userId) && o.data.status === 'Ожидает оплаты');
 
   if (userOrders.length === 0) {
     return "У вас нет неоплаченных выигранных лотов.";
@@ -491,7 +491,7 @@ function processFullPayment(replyMessageId, adminId) {
     
     const orders = getSheetData("Orders");
     const userOrders = orders.filter(o => 
-      String(o.data.user_id) === userId && o.data.status === 'unpaid'
+      String(o.data.user_id) === userId && o.data.status === 'Ожидает оплаты'
     );
     
     if (userOrders.length === 0) {
@@ -501,7 +501,7 @@ function processFullPayment(replyMessageId, adminId) {
     
     // Update all unpaid orders to paid
     userOrders.forEach(order => {
-      updateRow("Orders", order.rowIndex, { status: 'paid' });
+      updateRow("Orders", order.rowIndex, { status: 'Оплачено' });
     });
     
     // Update user's paid count
@@ -589,12 +589,12 @@ function processPartialPayment(text, replyMessageId, adminId) {
     
     // Process each order
     orders.forEach(order => {
-      if (String(order.data.user_id) === userId && order.data.status === 'unpaid') {
+      if (String(order.data.user_id) === userId && order.data.status === 'Ожидает оплаты') {
         const orderLotId = String(order.data.lot_id);
         
         if (lotIds.includes(orderLotId)) {
           // Mark as paid
-          updateRow("Orders", order.rowIndex, { status: 'paid' });
+          updateRow("Orders", order.rowIndex, { status: 'Оплачено' });
           paidCount++;
         } else {
           // Mark as not paid with note
@@ -602,7 +602,7 @@ function processPartialPayment(text, replyMessageId, adminId) {
           const newNotes = currentNotes + `\n[${new Date().toLocaleString()}] Не оплачен (админ: ${adminId})`;
           updateRow("Orders", order.rowIndex, { 
             admin_notes: newNotes,
-            status: 'unpaid' 
+            status: 'Ожидает оплаты' 
           });
           notPaidCount++;
         }
@@ -1609,7 +1609,7 @@ function finalizeAuction() {
         user_id: winnerId,
         win_date: new Date(),
         win_price: lot.current_price,
-        status: 'unpaid',
+        status: 'Ожидает оплаты',
         shipping_batch_id: ''
       };
       appendRow("Orders", newOrder);
