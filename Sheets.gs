@@ -81,7 +81,7 @@ const DEFAULT_SETTINGS = {
 Напишите ""КОПИТЬ"", если хотите накопить больше фигурок перед отправкой.`,
   outbid_notification_template: `🔔 Ваша ставка перебита!`,
   low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉`,
-  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите ""АУКЦИОН"".`,
+  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите "АУКЦИОН" в [vk.me/club{group_id}?text=АУКЦИОН|сообщения группы], чтобы получить детали.`,
   winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот`,
   unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
@@ -452,7 +452,7 @@ function parseSettingValue(v) {
 function createDemoData() {
   const lotSheet = getSheet('Config');
   if (lotSheet.getLastRow() <= 1) {
-    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
+    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'Активен', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
   }
 
   const addSettingIfNotExists = (key, value, description) => {

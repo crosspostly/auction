@@ -872,7 +872,7 @@ function handleWallPostNew(payload) {
     start_price: lot.start_price, 
     current_price: lot.start_price, 
     leader_id: "", 
-    status: "active", 
+    status: "Активен", 
     created_at: new Date(), 
     deadline: lot.deadline || new Date(new Date().getTime() + 7*24*60*60*1000), 
     bid_step: lot.bidStep || 0,
@@ -1105,9 +1105,9 @@ function handleWallReplyNew(payload) {
     return;
   }
 
-  if (lot.status !== "active") {
+  if (lot.status !== "Активен") {
     Monitoring.recordEvent('HANDLE_WALL_REPLY_LOT_INACTIVE', { lot_id: lot.lot_id, status: lot.status });
-    logInfo("⚠️ Lot found but NOT ACTIVE", { status: lot.status, lot_id: lot.lot_id });
+    logInfo("⚠️ Лот найден, но он НЕ АКТИВЕН", { status: lot.status, lot_id: lot.lot_id });
     return;
   }
 
@@ -1461,7 +1461,8 @@ function buildWinnerMessage(p) {
     .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')  // Use global replace and fallback
     .replace(/{price}/g, p.price || '0')                     // Use global replace and fallback
     .replace(/{PAYMENT_BANK}/g, paymentBank)
-    .replace(/{PAYMENT_PHONE}/g, paymentPhone);
+    .replace(/{PAYMENT_PHONE}/g, paymentPhone)
+    .replace(/{group_id}/g, p.group_id || getVkGroupId());
 }
 
 function buildLowBidMessage(p) {
@@ -1583,7 +1584,7 @@ function checkUserSubscription(userId) {
 }
 
 function finalizeAuction() {
-  const activeLots = getSheetData("Config").filter(row => row.data.status === "active" && parseRussianDate(row.data.deadline) < new Date());
+  const activeLots = getSheetData("Config").filter(row => row.data.status === "Активен" && parseRussianDate(row.data.deadline) < new Date());
   Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
 
   const allWinnersDataForReport = [];
@@ -1594,7 +1595,7 @@ function finalizeAuction() {
     const postId = parsePostKey(lot.post_id).postId;
     
     if (!lot.leader_id) {
-      updateLot(lot.lot_id, { status: "unsold" });
+      updateLot(lot.lot_id, { status: "Не продан" });
       postCommentToLot(postId, buildUnsoldLotCommentMessage());
       Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
     } else {
@@ -1635,11 +1636,11 @@ function finalizeAuction() {
         allUsers.push({ data: newUser, rowIndex: -1 });
       }
       
-      updateLot(lot.lot_id, { status: "sold" });
+      updateLot(lot.lot_id, { status: "Продан" });
 
       // Отправляем уведомление победителю в ЛС только если включена настройка отправки ЛС победителям
       if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
-        const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price } };
+        const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price, group_id: getVkGroupId() } };
         queueNotification(notification);
       }
 
