@@ -542,6 +542,81 @@ function createDemoData() {
 
   applyHeaderTooltips(usersSheet, SHEETS.Users.headers, USER_HEADERS_DESCRIPTIONS);
   applyHeaderTooltips(ordersSheet, SHEETS.Orders.headers, ORDER_HEADERS_DESCRIPTIONS);
+  
+  setupUsersConditionalFormatting();
+  setupOrdersConditionalFormatting();
+}
+
+/**
+ * Настраивает цветовое выделение для статусов в листе Заказы
+ */
+function setupOrdersConditionalFormatting() {
+  const sheet = getSheet('Orders');
+  const headers = SHEETS.Orders.headers;
+  const colIndex = headers.indexOf('status') + 1;
+  
+  if (colIndex === 0) return;
+  
+  const range = sheet.getRange(2, colIndex, 999, 1);
+  const rules = sheet.getConditionalFormatRules();
+  
+  const newRules = rules.filter(rule => rule.getRanges()[0].getA1Notation() !== range.getA1Notation());
+
+  const statusColors = {
+    "paid": "#d9ead3",    // Зеленый
+    "unpaid": "#f4cccc",  // Красный
+    "shipped": "#cfe2f3", // Синий
+    "accumulating": "#fff2cc" // Желтый (если используется)
+  };
+
+  for (const [status, color] of Object.entries(statusColors)) {
+    const rule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo(status)
+      .setBackground(color)
+      .setRanges([range])
+      .build();
+    newRules.push(rule);
+  }
+
+  sheet.setConditionalFormatRules(newRules);
+}
+
+/**
+ * Настраивает цветовое выделение для статусов в листе Пользователи
+ */
+function setupUsersConditionalFormatting() {
+  const sheet = getSheet('Users');
+  const headers = SHEETS.Users.headers;
+  const colIndex = headers.indexOf('shipping_status') + 1;
+  
+  if (colIndex === 0) return;
+  
+  const range = sheet.getRange(2, colIndex, 999, 1);
+  const rules = sheet.getConditionalFormatRules();
+  
+  // Удаляем старые правила для этой колонки
+  const newRules = rules.filter(rule => rule.getRanges()[0].getA1Notation() !== range.getA1Notation());
+
+  const statusColors = {
+    "Накопление": "#d9ead3",      // Светло-зеленый
+    "Готов к отправке": "#fff2cc", // Светло-желтый
+    "Ожидает отправки": "#fce5cd", // Светло-оранжевый
+    "Отправлено": "#cfe2f3",       // Светло-синий
+    "Доставлено": "#efefef",       // Серый
+    "Проблема": "#f4cccc"          // Светло-красный
+  };
+
+  for (const [status, color] of Object.entries(statusColors)) {
+    const rule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo(status)
+      .setBackground(color)
+      .setRanges([range])
+      .build();
+    newRules.push(rule);
+  }
+
+  sheet.setConditionalFormatRules(newRules);
+  logDebug("Настроено цветовое выделение в листе Пользователи");
 }
 
 // Новая вспомогательная функция для применения тултипов
