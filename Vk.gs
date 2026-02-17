@@ -366,13 +366,19 @@ function enableCallbackEvents(groupId, serverId, eventsToEnable) {
   }
 }
 
-function sendMessage(userId, message) { 
-  const result = callVk("messages.send", { 
-    user_id: String(userId), 
-    random_id: String(Math.floor(Math.random()*1e9)), 
-    message: message, 
-    disable_mentions: 1 
-  }); 
+function sendMessage(userId, message, attachment) {
+  const payload = {
+    peer_id: String(userId),
+    random_id: String(Math.floor(Math.random() * 1e9)),
+    message: message,
+    disable_mentions: 1
+  };
+
+  if (attachment) {
+    payload.attachment = attachment;
+  }
+
+  const result = callVk("messages.send", payload); 
   
   // Проверяем, была ли ошибка при отправке сообщения
   if (result && result.error) {

@@ -62,18 +62,76 @@ function doPost(e) {
     }
     // --- End of Alien Group Protection ---
 
-    // Process the event in real-time. If it fails, it will be logged, but not retried.
+    // Queue the event for asynchronous processing and immediately return "ok".
     if (data.type) {
-      routeEvent(data);
+      enqueueEvent(data, rawPayload);
     }
     
-    return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
+    return ContentService.createTextOutput("ok").setMMimeType(ContentService.MimeType.TEXT);
   } catch (error) {
     logError('doPost_critical', error, e.postData ? e.postData.contents : 'no post data');
     // Always return "ok" even on error, so VK doesn't disable the server.
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
   }
 }
+
+/**
+ * Enqueues a VK event into the 'EventQueue' sheet for reliable, asynchronous processing.
+ * @param {object} data The parsed event data object.
+ * @param {string} rawPayload The original, unparsed JSON string from the VK request.
+ */
+function enqueueEvent(data, rawPayload) {
+  try {
+    appendRow("EventQueue", {
+      eventId: Utilities.getUuid(),
+      payload: rawPayload,
+      status: "pending",
+      receivedAt: new Date()
+    });
+  } catch (e) {
+    logError('enqueueEvent_failed', e, { eventType: data.type });
+  }
+}
+
+/**
+ * Processes a batch of events from the EventQueue.
+ * Designed to be run by a time-based trigger.
+ */
+function processEventQueue() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    console.log("processEventQueue skipped: lock not acquired.");
+    return;
+  }
+  
+  try {
+    const events = getSheetData("EventQueue")
+      .filter(e => e.data.status === "pending")
+      .sort((a, b) => new Date(a.data.receivedAt) - new Date(b.data.receivedAt));
+
+    if (events.length === 0) return;
+
+    // Process up to 10 events to avoid hitting execution time limits.
+    const eventsToProcess = events.slice(0, 10);
+    
+    logDebug(`Processing ${eventsToProcess.length} events from queue.`);
+
+    eventsToProcess.forEach(eventRow => {
+      const { eventId, payload } = eventRow.data;
+      try {
+        const data = JSON.parse(payload);
+        routeEvent(data); // The original routing logic
+        updateRow("EventQueue", eventRow.rowIndex, { status: "processed" });
+      } catch (e) {
+        logError("processEventQueue_event_failed", e, { eventId: eventId });
+        updateRow("EventQueue", eventRow.rowIndex, { status: "failed" });
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('VK Auction')
@@ -89,6 +147,29 @@ function onOpen() {
       .addItem('🧹 Очистить системные листы', 'clearSystemSheets'))
     .addToUi();
 }
+
+/**
+ * Simple trigger that runs automatically when a user edits the spreadsheet.
+ * If the "Настройки" sheet is edited, it clears the settings cache to ensure
+ * changes are applied immediately.
+ * @param {Object} e The event object from the edit trigger.
+ */
+function onEdit(e) {
+  try {
+    const editedSheetName = e.source.getActiveSheet().getName();
+    const settingsSheetName = SHEETS.Settings.name; // "Настройки"
+
+    if (editedSheetName === settingsSheetName) {
+      CacheService.getScriptCache().remove("settings");
+      // Use console.log for silent logging that doesn't require UI permissions.
+      console.log(`Кэш настроек очищен автоматически из-за изменений в листе "${editedSheetName}".`);
+    }
+  } catch (err) {
+    // Log errors silently to avoid interrupting the user.
+    console.error("Ошибка в триггере onEdit: " + err.toString());
+  }
+}
+
 function showAllSheets() { toggleSystemSheets(false); }
 function hideSystemSheets() { toggleSystemSheets(true); }
 
@@ -707,15 +788,16 @@ function updateUserPaymentStats(userId, paidCount) {
  */
 function handleAdminReply(payload) {
   const settings = getSettings();
-  const adminIds = (settings.ADMIN_IDS || '').toString().split(',').map(id => id.trim()).filter(id => id);
+  const parsedAdmins = parseAdminIds(settings.ADMIN_IDS);
+  const adminUserIds = parsedAdmins.users;
   
   const message = payload.object.message;
   const userId = String(message.from_id);
   const text = (message.text || '').toLowerCase().trim();
   const replyMessageId = message.reply_message ? message.reply_message.id : null;
   
-  // Check if sender is admin
-  if (!adminIds.includes(userId)) {
+  // Check if sender is an admin user
+  if (!adminUserIds.includes(userId)) {
     logDebug("handleAdminReply: Ignoring non-admin message", { userId });
     return;
   }
@@ -768,7 +850,8 @@ function handleMessageNew(payload) {
     }
 
     // --- НОВАЯ КОМАНДА: КОПИТЬ ---
-    if (lowerCaseText === 'копить') {
+    const accumulateCommand = (settings.ACCUMULATE_COMMAND || 'копить').toLowerCase();
+    if (lowerCaseText === accumulateCommand) {
         logInfo("handleMessageNew: 'КОПИТЬ' command received.", {userId: userId});
         const allUsers = getSheetData("Users");
         const userRow = allUsers.find(u => String(u.data.user_id) === userId);
@@ -887,22 +970,25 @@ function parseLotFromPost(postObject) {
   try {
     const text = postObject.text || "";
     
+    const settings = getSettings();
+    const auctionTag = settings.AUCTION_TAG || '#аукцион';
+    const auctionTagRegex = new RegExp(auctionTag, "i");
+
     // Log incoming post for debugging
     logInfo("📥 Новый пост получен", { 
       post_id: postObject.id,
       owner_id: postObject.owner_id,
       text_preview: text.substring(0, 200),
-      has_auction_tag: /#аукцион/i.test(text),
+      has_auction_tag: auctionTagRegex.test(text),
       has_lot_number: /№\s*[a-zA-Z0-9_]+/i.test(text)
     });
     
-    if (!/#аукцион/i.test(text)) {
-      logInfo("❌ Пост не содержит #аукцион", { text_preview: text.substring(0, 100) });
+    if (!auctionTagRegex.test(text)) {
+      logInfo(`❌ Пост не содержит тег "${auctionTag}"`, { text_preview: text.substring(0, 100) });
       return null;
     }
     
     // Check if Saturday-only mode is enabled
-    const settings = getSettings();
     const saturdayOnly = getSetting('saturday_only_enabled') === 'ВКЛ';
     
     if (saturdayOnly) {
@@ -1583,6 +1669,68 @@ function checkUserSubscription(userId) {
   }
 }
 
+/**
+ * Checks if all auctions have concluded and triggers the finalization process.
+ * This function is designed to be called by a time-based trigger every 15 minutes.
+ */
+function checkAndFinalizeAuctions() {
+  const now = new Date();
+  // Чтобы не работать днем, запускаем проверку только вечером, например, с 20:00
+  if (now.getHours() < 20) {
+    return;
+  }
+
+  const activeLots = getSheetData("Config").filter(row => row.data.status === "Активен");
+  if (activeLots.length === 0) {
+    // Нет активных лотов, нечего делать.
+    return;
+  }
+
+  // Проверяем, прошел ли дедлайн хотя бы у одного лота.
+  const isAnyDeadlinePassed = activeLots.some(row => parseRussianDate(row.data.deadline) < now);
+  if (!isAnyDeadlinePassed) {
+    // Еще не время, ни один аукцион номинально не завершился.
+    return;
+  }
+
+  const allBids = getSheetData("Bids");
+  const activeLotIds = new Set(activeLots.map(l => l.data.lot_id));
+  
+  const bidsForActiveLots = allBids.filter(bid => activeLotIds.has(bid.data.lot_id));
+
+  let lastBidTimestamp = 0;
+  if (bidsForActiveLots.length > 0) {
+    // Находим самую последнюю ставку
+    const lastBid = bidsForActiveLots.reduce((latest, current) => {
+      const latestDate = parseRussianDate(latest.data.timestamp);
+      const currentDate = parseRussianDate(current.data.timestamp);
+      return currentDate > latestDate ? current : latest;
+    });
+    lastBidTimestamp = parseRussianDate(lastBid.data.timestamp).getTime();
+  } else {
+    // Если ставок не было вообще, за точку отсчета берем самый ранний дедлайн
+    const firstDeadline = activeLots.reduce((earliest, current) => {
+        const earliestDate = parseRussianDate(earliest.data.deadline);
+        const currentDate = parseRussianDate(current.data.deadline);
+        return currentDate < earliestDate ? current : earliest;
+    }).data.deadline;
+    lastBidTimestamp = parseRussianDate(firstDeadline).getTime();
+  }
+  
+  const minutesSinceLastBid = (now.getTime() - lastBidTimestamp) / (1000 * 60);
+
+  logDebug("Проверка финализации", {
+    active_lots: activeLots.length,
+    last_bid_ago_min: minutesSinceLastBid
+  });
+
+  // Если с последней ставки прошло больше 15 минут, пора закрывать аукционы.
+  if (minutesSinceLastBid > 15) {
+    logInfo("🏁 Аукционы завершены. Запуск финальной обработки.");
+    finalizeAuction();
+  }
+}
+
 function finalizeAuction() {
   const activeLots = getSheetData("Config").filter(row => row.data.status === "Активен" && parseRussianDate(row.data.deadline) < new Date());
   Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
@@ -1708,33 +1856,35 @@ function finalizeAuction() {
  */
 function sendAdminReport(winners) {
   const settings = getSettings();
-  let adminIdsValue = settings.ADMIN_IDS;
+  const parsedAdmins = parseAdminIds(settings.ADMIN_IDS);
+  const adminIds = parsedAdmins.all;
   
-  logDebug("sendAdminReport: Starting", { winner_count: winners.length, admin_ids_raw: adminIdsValue });
+  logDebug("sendAdminReport: Starting", { winner_count: winners.length, admin_ids_raw: settings.ADMIN_IDS, parsed_ids: adminIds });
 
-  if (!adminIdsValue) {
-    logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны в настройках.");
-    return;
-  }
-  
-  const adminIds = String(adminIdsValue).split(',').map(id => id.trim()).filter(id => id);
-  if (adminIds.length === 0) {
-    logInfo("Отчет администраторам не отправлен: ADMIN_IDS пусты после парсинга.");
+  if (!adminIds || adminIds.length === 0) {
+    logInfo("Отчет администраторам не отправлен: ADMIN_IDS не указаны или некорректно настроены.");
     return;
   }
 
-  // Находим уникальных победителей
   const uniqueWinnerIds = [...new Set(winners.map(w => w.winner_id))];
   logDebug("sendAdminReport: Processing unique winners", { count: uniqueWinnerIds.length, ids: uniqueWinnerIds });
 
   uniqueWinnerIds.forEach(winnerId => {
+    // Собираем все лоты для данного победителя
+    const lotsForWinner = winners.filter(w => w.winner_id === winnerId);
+    
+    // Собираем ID вложений для этих лотов
+    const attachments = lotsForWinner
+      .map(lot => lot.attachment_id)
+      .filter(id => id) // Убираем пустые/null значения
+      .join(',');
+
     const userSummary = buildUserOrderSummary(winnerId);
     const winnerName = getUserName(winnerId); 
     
     let finalMessageForAdmin = "";
     
     if (userSummary.startsWith("У вас нет")) {
-      // ФОЛЛБЭК: Если сводка пуста, шлем краткое инфо, чтобы админ знал о факте продажи
       logInfo(`⚠️ Сводка для ${winnerId} пуста, отправляю краткое уведомление.`);
       finalMessageForAdmin = `⚠️ Лот продан пользователю [id${winnerId}|${winnerName}], но сводка заказов пуста.\n\nПроверьте листы "Лоты" и "Заказы" вручную.`;
     } else {
@@ -1742,14 +1892,10 @@ function sendAdminReport(winners) {
       finalMessageForAdmin = `${adminHeader}\n\n${userSummary}`;
     }
 
-    // Отправляем сообщение каждому администратору
     adminIds.forEach(adminId => {
       try {
-        logDebug(`sendAdminReport: Attempting to send to admin ${adminId}`, { text_length: finalMessageForAdmin.length });
-        const res = sendMessage(adminId, finalMessageForAdmin);
-        if (res && res.error) {
-          logError('sendAdminReport_vk_error', res.error.error_msg, { adminId: adminId });
-        }
+        logDebug(`sendAdminReport: Attempting to send to admin ${adminId}`, { text_length: finalMessageForAdmin.length, has_attachment: !!attachments });
+        sendMessage(adminId, finalMessageForAdmin, attachments);
       } catch (e) {
         logError('sendAdminReport_send_failed', e, { adminId: adminId, winnerId: winnerId });
       }
@@ -1769,16 +1915,41 @@ function setupTriggers() {
   // Delete all existing triggers to avoid duplicates
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
 
-  // Trigger for processing the notification queue every 5 minutes (GAS limitation)
-  ScriptApp.newTrigger("processNotificationQueue").timeBased().everyMinutes(5).create();
+  // A single trigger to run all periodic tasks every 5 minutes.
+  ScriptApp.newTrigger("runPeriodicTasks").timeBased().everyMinutes(5).create();
 
-  // Trigger for processing admin replies to messages every 10 minutes
-  ScriptApp.newTrigger("processAdminReplies").timeBased().everyMinutes(10).create();
+  // Trigger for checking auction finalization every 15 minutes.
+  ScriptApp.newTrigger("checkAndFinalizeAuctions").timeBased().everyMinutes(15).create();
   
   // Setup monitoring and maintenance triggers
   setupPeriodicMonitoring();
   setupDailyMaintenance();
 }
+
+/**
+ * A master function to run all scheduled tasks.
+ * This is called by a single time-based trigger.
+ */
+function runPeriodicTasks() {
+  const start = new Date();
+  logDebug("Starting periodic tasks run.");
+
+  try {
+    processEventQueue();
+  } catch (e) {
+    logError("runPeriodicTasks_EventQueueError", e);
+  }
+
+  try {
+    processNotificationQueue();
+  } catch (e) {
+    logError("runPeriodicTasks_NotificationQueueError", e);
+  }
+  
+  const duration = (new Date().getTime() - start.getTime()) / 1000;
+  logDebug(`Periodic tasks finished in ${duration}s.`);
+}
+
 /**
  * Process admin replies via trigger
  * Polls for new admin messages and processes payment commands

@@ -39,7 +39,7 @@ function runFinalizationTest() {
     start_price: 100,
     current_price: 500,
     leader_id: testUserId,
-    status: "active", 
+    status: "Активен", // Важно: статус активен, чтобы скрипт его подхватил
     created_at: createdDate,
     deadline: deadlineStr, 
     bid_step: 50,
@@ -86,7 +86,7 @@ function runFinalizationTest() {
     console.log("✅ finalizeAuction() выполнена успешно.");
     console.log("📋 ПРОВЕРЬТЕ РЕЗУЛЬТАТЫ:");
     console.log(`   1. В листе "Заказы" должна появиться строка с lot_id=${testLotId}`);
-    console.log(`   2. В листе "Лоты" статус лота ${testLotId} должен смениться на 'sold'`);
+    console.log(`   2. В листе "Лоты" статус лота ${testLotId} должен смениться на 'Продан'`);
     console.log(`   3. Администраторы (ID: ${settings.ADMIN_IDS}) должны получить ЛС в ВКонтакте.`);
   } catch (e) {
     console.error("❌ Ошибка при выполнении finalizeAuction():", e);
@@ -99,16 +99,35 @@ function runFinalizationTest() {
 function testAdminMessage() {
   console.log("🚀 Запуск теста связи с администратором...");
   const settings = getSettings();
-  const adminIds = String(settings.ADMIN_IDS || "").split(',').map(id => id.trim()).filter(id => id);
+  const parsedAdmins = parseAdminIds(settings.ADMIN_IDS);
+  const adminIds = parsedAdmins.all;
   
   if (adminIds.length === 0) {
     console.error("❌ ADMIN_IDS не настроены!");
     return;
   }
 
+  // --- Поиск картинки для теста ---
+  let testAttachment = null;
+  let testMessage = "🧪 Проверка связи! Если вы видите это сообщение, значит бот может писать вам в ЛС.";
+  try {
+    const lots = getSheetData("Config");
+    const lotWithImage = lots.find(l => l.data.attachment_id);
+    if (lotWithImage) {
+      testAttachment = lotWithImage.data.attachment_id;
+      testMessage += "\n\n🖼️ Тестовое вложение добавлено из лота №" + lotWithImage.data.lot_id;
+      console.log(`✅ Найдено вложение для теста: ${testAttachment}`);
+    } else {
+      console.warn("⚠️ Вложение для теста не найдено в листе 'Лоты'. Отправляю сообщение без картинки.");
+    }
+  } catch(e) {
+    console.error("❌ Ошибка при поиске вложения для теста:", e);
+  }
+  // ---------------------------------
+
   adminIds.forEach(id => {
     console.log(`📡 Отправляю тестовое сообщение админу ${id}...`);
-    const res = sendMessage(id, "🧪 Проверка связи! Если вы видите это сообщение, значит бот может писать вам в ЛС.");
+    const res = sendMessage(id, testMessage, testAttachment);
     if (res && res.error) {
       console.error(`❌ Ошибка ВК для ID ${id}: [${res.error.error_code}] ${res.error.error_msg}`);
       if (res.error.error_code === 901) {
