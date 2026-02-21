@@ -366,19 +366,13 @@ function enableCallbackEvents(groupId, serverId, eventsToEnable) {
   }
 }
 
-function sendMessage(userId, message, attachment) {
-  const payload = {
-    peer_id: String(userId),
-    random_id: String(Math.floor(Math.random() * 1e9)),
-    message: message,
-    disable_mentions: 1
-  };
-
-  if (attachment) {
-    payload.attachment = attachment;
-  }
-
-  const result = callVk("messages.send", payload); 
+function sendMessage(userId, message) { 
+  const result = callVk("messages.send", { 
+    user_id: String(userId), 
+    random_id: String(Math.floor(Math.random()*1e9)), 
+    message: message, 
+    disable_mentions: 1 
+  }); 
   
   // Проверяем, была ли ошибка при отправке сообщения
   if (result && result.error) {
@@ -454,4 +448,35 @@ function getUserName(userId) {
   } catch(e) {
     return "Участник";
   }
+}
+
+/**
+ * ПРОВЕРКА: Ответил ли бот уже на этот комментарий в самом ВК?
+ * @param {string|number} postId - ID поста
+ * @param {string|number} commentId - ID комментария, который проверяем
+ * @return {boolean} - true, если ответ от группы уже есть
+ */
+function checkIfBotReplied(postId, commentId) {
+  const groupId = getVkGroupId();
+  try {
+    const res = callVk("wall.getComments", {
+      owner_id: "-" + groupId,
+      comment_id: String(commentId),
+      post_id: String(postId),
+      count: 10,
+      sort: "desc"
+    });
+    
+    if (res && res.response && res.response.items) {
+      // Ищем комментарии, где author_id равен ID нашей группы (отрицательное значение)
+      const botReplied = res.response.items.some(c => String(c.from_id) === "-" + groupId);
+      if (botReplied) {
+        logDebug("🔎 ВК ПОДТВЕРДИЛ: Ответ бота уже существует под комментарием " + commentId);
+      }
+      return botReplied;
+    }
+  } catch (e) {
+    logError("checkIfBotReplied", e);
+  }
+  return false;
 }

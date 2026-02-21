@@ -8,25 +8,24 @@
  */
 function periodicSystemCheck() {
   try {
-    // Process error buffer (EventQueue)
+    // 1. Сначала обрабатываем очередь застрявших событий (ретраи)
     processEventQueue();
 
-    // --- Auction Finalization Logic ---
+    // 2. --- Логика индивидуального закрытия лотов ---
+    // Находим все лоты, чей дедлайн уже наступил, а статус еще "active"
     const now = new Date();
-    // Assuming script timezone is Moscow (GMT+3).
-    const day = now.getDay(); // Sunday = 0, Saturday = 6
-    const hour = now.getHours(); // 0-23
+    const expiredLots = getSheetData("Config").filter(row => 
+      row.data.status === "active" && 
+      parseRussianDate(row.data.deadline) <= now
+    );
     
-    // On Saturday, from 21:00 to 21:59, run the finalization check.
-    // This covers the main 21:00 deadline and subsequent checks (e.g., 21:10)
-    // because the periodic check runs every 10 minutes.
-    if (day === 6 && hour === 21) {
-      logInfo('Periodic check is triggering finalizeAuction...', { time: now });
+    if (expiredLots.length > 0) {
+      logInfo(`Periodic check: Found ${expiredLots.length} expired lots. Triggering finalization...`);
       finalizeAuction();
     }
-    // --- End of Auction Finalization Logic ---
+    // --- Конец логики закрытия лотов ---
 
-    // Perform continuous monitoring
+    // 3. Выполняем легкий мониторинг
     const stats = continuousMonitoring();
     
     // Perform a light health check

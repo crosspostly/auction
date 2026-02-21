@@ -7,6 +7,7 @@ const SHEETS = {
   EventQueue: { name: "Очередь Событий", headers: ["eventId", "payload", "status", "receivedAt"] },
   NotificationQueue: { name: "Очередь", headers: ["queue_id", "user_id", "type", "payload", "status", "created_at", "processed_at", "send_after"] },
   Incoming: { name: "Входящие", headers: ["date", "type", "group_id", "params", "payload"] },
+  OrderStatuses: { name: "Статусы Заказов", headers: ["status_key", "status_description"] },
   Logs: { name: "Журнал", headers: ["date", "type", "message", "details"] }
 };
 
@@ -26,20 +27,6 @@ const SHIPPING_STATUS_DESCRIPTIONS = {
   "Отправлено": "Лоты отправлены.",
   "Доставлено": "Лоты получены пользователем.",
   "Проблема": "Возникли сложности с отправкой (возврат, неверный адрес и т.п.)."
-};
-
-const ORDER_STATUS_OPTIONS = [
-  "Ожидает оплаты",
-  "Оплачено",
-  "Отправлено",
-  "Проблема"
-];
-
-const ORDER_STATUS_DESCRIPTIONS = {
-  "Ожидает оплаты": "Пользователь выиграл лот, но еще не прислал оплату.",
-  "Оплачено": "Оплата за лот получена.",
-  "Отправлено": "Лот был отправлен пользователю как часть партии.",
-  "Проблема": "Возникла проблема с оплатой или заказом (например, отмена)."
 };
 
 const USER_HEADERS_DESCRIPTIONS = {
@@ -94,7 +81,7 @@ const DEFAULT_SETTINGS = {
 Напишите ""КОПИТЬ"", если хотите накопить больше фигурок перед отправкой.`,
   outbid_notification_template: `🔔 Ваша ставка перебита!`,
   low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉`,
-  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите "АУКЦИОН" в [vk.me/club{group_id}?text=АУКЦИОН|сообщения группы], чтобы получить детали.`,
+  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите ""АУКЦИОН"".`,
   winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот`,
   unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
@@ -107,9 +94,7 @@ const DEFAULT_SETTINGS = {
   reply_on_invalid_bid_enabled: 'ВКЛ',
   send_winner_dm_enabled: 'ВКЛ',
   saturday_only_enabled: 'ВКЛ',
-  test_mode_enabled: 'ВЫКЛ',
-  AUCTION_TAG: '#аукцион@dndpotustoronu',
-  ACCUMULATE_COMMAND: 'копить'
+  test_mode_enabled: 'ВЫКЛ'
 };
 
 const SETTINGS_DESCRIPTIONS = {
@@ -135,9 +120,7 @@ const SETTINGS_DESCRIPTIONS = {
   reply_on_invalid_bid_enabled: "Отвечать комментарием на некорректные ставки (шаг, цена) (ВКЛ/ВЫКЛ)",
   send_winner_dm_enabled: "Отправлять победителю сообщение в ЛС (ВКЛ/ВЫКЛ)",
   saturday_only_enabled: "Обрабатывать только посты, опубликованные в субботу (ВКЛ/ВЫКЛ)",
-  test_mode_enabled: "Режим тестирования. Если ВКЛ, аукцион длится 5 минут. (ВКЛ/ВЫКЛ)",
-  AUCTION_TAG: "Ключевой тег для определения постов-аукционов (например, #аукцион@название_группы)",
-  ACCUMULATE_COMMAND: "Кодовое слово для перевода лотов в статус накопления"
+  test_mode_enabled: "Режим тестирования. Если ВКЛ, аукцион длится 5 минут. (ВКЛ/ВЫКЛ)"
 };
 
 const TOGGLE_SETTINGS = {
@@ -469,96 +452,80 @@ function parseSettingValue(v) {
 function createDemoData() {
   const lotSheet = getSheet('Config');
   if (lotSheet.getLastRow() <= 1) {
-    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'Активен', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
+    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
   }
 
-  // --- Надежное обновление настроек (метод "Пересборка") ---
-  const settingsSheet = getSheet('Settings');
-  const existingValues = settingsSheet.getDataRange().getValues();
-  const userSettings = new Map();
-  
-  // 1. Сохраняем пользовательские настройки (кроме заголовка)
-  existingValues.slice(1).forEach(row => {
-    if (row[0] && row[1] !== "" && row[1] !== null && row[1] !== undefined) { // Ключ есть, и значение не пустое
-      userSettings.set(String(row[0]).trim(), row[1]);
+  const addSettingIfNotExists = (key, value, description) => {
+    // Re-fetch existing settings inside the helper to ensure we have the latest data,
+    // as appendRow will clear the cache.
+    const existingSettings = getSheetData('Settings').map(s => s.data.setting_key);
+    if (!existingSettings.includes(key)) {
+      // Use the project's custom appendRow to ensure cache is busted for the next check.
+      appendRow("Settings", { 
+        setting_key: key, 
+        setting_value: value, 
+        description: description 
+      });
     }
-  });
+  };
 
-  const allDefaultSettings = [
-    // --- АДМИНИСТРАТОР ---
-    { key: "--- АДМИНИСТРАТОР ---", value: "", desc: "" },
-    { key: "ADMIN_IDS", value: DEFAULT_SETTINGS.ADMIN_IDS, desc: SETTINGS_DESCRIPTIONS.ADMIN_IDS },
-    // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
-    { key: "--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", value: "", desc: "" },
-    ...["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules", "AUCTION_TAG", "ACCUMULATE_COMMAND"].map(k => ({ key: k, value: DEFAULT_SETTINGS[k], desc: SETTINGS_DESCRIPTIONS[k] })),
-    // --- ПЕРЕКЛЮЧАТЕЛИ ---
-    { key: "--- ПЕРЕКЛЮЧАТЕЛИ ---", value: "", desc: "" },
-    ...[
-      "bid_step_enabled", "subscription_check_enabled", "debug_logging_enabled",
-      "reply_on_invalid_bid_enabled", "send_winner_dm_enabled",
-      "saturday_only_enabled", "test_mode_enabled"
-    ].map(k => ({ key: k, value: DEFAULT_SETTINGS[k], desc: SETTINGS_DESCRIPTIONS[k] })),
-    // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
-    { key: "--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", value: "", desc: "" },
-    // --- ШАБЛОНЫ ---
-    { key: "--- ШАБЛОНЫ ---", value: "", desc: "" },
-    ...[
-      "order_summary_template", "winner_comment_template", "unsold_lot_comment_template",
-      "outbid_notification_template", "low_bid_notification_template", "winner_notification_template",
-      "subscription_required_template", "invalid_step_template", "max_bid_exceeded_template",
-      "auction_finished_template",
-    ].map(k => ({ key: k, value: DEFAULT_SETTINGS[k], desc: SETTINGS_DESCRIPTIONS[k] }))
+  // --- АДМИНИСТРАТОР ---
+  addSettingIfNotExists("--- АДМИНИСТРАТОР ---", "", "");
+  addSettingIfNotExists("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
+
+  // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
+  addSettingIfNotExists("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
+  for (const key of ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"]) {
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  }
+
+  // --- ПЕРЕКЛЮЧАТЕЛИ ---
+  addSettingIfNotExists("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
+  for (const key of [
+    "bid_step_enabled",
+    "subscription_check_enabled",
+    "debug_logging_enabled",
+    "reply_on_invalid_bid_enabled",
+    "send_winner_dm_enabled",
+    "saturday_only_enabled",
+    "test_mode_enabled"
+  ]) {
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  }
+
+  // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
+  addSettingIfNotExists("--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", "");
+
+  // --- ШАБЛОНЫ ---
+  addSettingIfNotExists("--- ШАБЛОНЫ ---", "", "");
+  const templateKeys = [
+    "order_summary_template",
+    "winner_comment_template",
+    "unsold_lot_comment_template",
+    "outbid_notification_template",
+    "low_bid_notification_template",
+    "winner_notification_template",
+    "subscription_required_template",
+    "invalid_step_template",
+    "max_bid_exceeded_template",
+    "auction_finished_template",
   ];
-  
-  // 2. Собираем новый, идеальный лист в памяти
-  const newSheetData = allDefaultSettings.map(setting => {
-    const userValue = userSettings.get(setting.key);
-    const finalValue = userValue !== undefined ? userValue : setting.value;
-    return [setting.key, finalValue, setting.desc];
-  });
-
-  // 3. Очищаем старые данные и записываем новые
-  if (settingsSheet.getLastRow() > 1) {
-    settingsSheet.getRange(2, 1, settingsSheet.getLastRow() - 1, 3).clearContent();
+  for (const key of templateKeys) {
+    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
   
-  if (newSheetData.length > 0) {
-    settingsSheet.getRange(2, 1, newSheetData.length, 3).setValues(newSheetData);
-  }
-  
-  logInfo("Лист настроек пересобран и упорядочен.");
-  // --- Конец надежного обновления ---
-
   applyDropdownValidation();
   setupConditionalFormatting();
 
   const usersSheet = getSheet('Users');
   const ordersSheet = getSheet('Orders');
+  const orderStatusesSheet = getSheet('OrderStatuses');
 
-  // --- Создание всплывающей подсказки для статусов доставки ---
-  const shippingStatusTooltip = SHIPPING_STATUS_OPTIONS.map(status => 
-    `${status}: ${SHIPPING_STATUS_DESCRIPTIONS[status]}`
-  ).join('\n\n');
-  USER_HEADERS_DESCRIPTIONS.shipping_status = shippingStatusTooltip;
-  
-  // --- Создание всплывающей подсказки и выпадающего списка для статусов ЗАКАЗОВ ---
-  const orderStatusTooltip = ORDER_STATUS_OPTIONS.map(status =>
-    `${status}: ${ORDER_STATUS_DESCRIPTIONS[status]}`
-  ).join('\n\n');
-  ORDER_HEADERS_DESCRIPTIONS.status = orderStatusTooltip;
-
-  const ordersHeaders = SHEETS.Orders.headers;
-  const orderStatusColIndex = ordersHeaders.indexOf('status') + 1;
-  if (orderStatusColIndex > 0) {
-    const dropdownRange = ordersSheet.getRange(2, orderStatusColIndex, 999, 1);
-    const rule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(ORDER_STATUS_OPTIONS)
-      .setAllowInvalid(false)
-      .setHelpText('Выберите статус заказа из списка.')
-      .build();
-    dropdownRange.setDataValidation(rule);
+  if (orderStatusesSheet.getLastRow() <= 1) {
+    SHIPPING_STATUS_OPTIONS.forEach(status => {
+      appendRow('OrderStatuses', { status_key: status, status_description: SHIPPING_STATUS_DESCRIPTIONS[status] });
+    });
   }
-  // --------------------------------------------------------------------
 
   const usersHeaders = SHEETS.Users.headers;
   const shippingStatusColIndex = usersHeaders.indexOf('shipping_status') + 1;
@@ -727,12 +694,13 @@ function queueNotification(n) {
   let existing = null;
 
   if (n.type === "outbid" || n.type === "winner") {
-    // For outbid and winner notifications, check if there's already a pending notification for this user and lot
+    // For outbid and winner notifications, check if there's already a pending notification for this user, lot AND comment
     existing = rows.find(r =>
       r.data.status === "pending" &&
       String(r.data.user_id) === String(n.user_id) &&
       r.data.type === n.type &&
-      r.data.payload.includes(n.payload.lot_id) // Check if payload contains the same lot_id
+      r.data.payload.includes(n.payload.lot_id) &&
+      (n.payload.comment_id ? r.data.payload.includes(n.payload.comment_id) : true)
     );
   } else {
     // For other types, check user_id and type
@@ -792,46 +760,8 @@ function queueNotification(n) {
   }
 }
 
-
-
 function updateNotificationStatus(id, status, date) {
-
   const rows = getSheetData("NotificationQueue");
-
   const match = rows.find(r => String(r.data.queue_id) === String(id));
-
   if (match) updateRow("NotificationQueue", match.rowIndex, { status: status, processed_at: date || new Date() });
-
-}
-
-
-
-/**
-
- * Clears the cached settings, forcing a reload from the "Настройки" sheet.
-
- * This is useful when you change a setting in the sheet and want it to take effect immediately.
-
- */
-
-function clearSettingsCache() {
-
-  try {
-
-    CacheService.getScriptCache().remove("settings");
-
-    SpreadsheetApp.getUi().alert("Кэш настроек успешно очищен. Скрипт теперь будет использовать последние значения из таблицы.");
-
-    logInfo("Кэш настроек очищен вручную.");
-
-  } catch (e) {
-
-    logError("clearSettingsCache", e);
-
-    // This might fail if run from a context without a UI (e.g., a trigger), so we handle it gracefully.
-
-    console.error("Не удалось очистить кэш настроек: " + e.toString());
-
-  }
-
 }
