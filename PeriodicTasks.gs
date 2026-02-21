@@ -1,243 +1,100 @@
 /**
- * @fileoverview Periodic monitoring functions that can be scheduled to run automatically
+ * @fileoverview Periodic monitoring functions with self-lifecycle management
  */
 
 /**
- * Function to be called periodically to monitor system health
- * This can be set up as a time-based trigger
+ * ЗАПУСКАТЕЛЬ: Срабатывает в 21:00. Создает частый мониторинг, если есть активные лоты.
  */
-function periodicSystemCheck() {
-  try {
-    // 1. Сначала обрабатываем очередь застрявших событий (ретраи)
-    processEventQueue();
-
-    // 2. --- Логика индивидуального закрытия лотов ---
-    // Находим все лоты, чей дедлайн уже наступил, а статус еще "active"
-    const now = new Date();
-    const expiredLots = getSheetData("Config").filter(row => 
-      row.data.status === "active" && 
-      parseRussianDate(row.data.deadline) <= now
-    );
-    
-    if (expiredLots.length > 0) {
-      logInfo(`Periodic check: Found ${expiredLots.length} expired lots. Triggering finalization...`);
-      finalizeAuction();
-    }
-    // --- Конец логики закрытия лотов ---
-
-    // 3. Выполняем легкий мониторинг
-    const stats = continuousMonitoring();
-    
-    // Perform a light health check
-    const healthResults = [];
-    
-    // Check if critical queues are too full
-    const eventQueueSize = getSheetData("EventQueue").filter(e => e.data.status === "pending").length;
-    const notificationQueueSize = getSheetData("NotificationQueue").filter(n => n.data.status === "pending").length;
-    
-    if (eventQueueSize > 50) {
-      Monitoring.recordEvent('ALERT_HIGH_EVENT_QUEUE', { count: eventQueueSize });
-    }
-    
-    if (notificationQueueSize > 100) {
-      Monitoring.recordEvent('ALERT_HIGH_NOTIFICATION_QUEUE', { count: notificationQueueSize });
-    }
-    
-    // Log successful periodic check
-    Monitoring.recordEvent('PERIODIC_CHECK_COMPLETED', {
-      timestamp: new Date(),
-      eventQueuePending: eventQueueSize,
-      notificationQueuePending: notificationQueueSize,
-      stats: stats
-    });
-    
-  } catch (error) {
-    Monitoring.recordEvent('PERIODIC_CHECK_ERROR', {
-      error: error.message,
-      stack: error.stack
-    });
-    Logger.log(`Ошибка в периодической проверке: ${error.message}`);
+function startAuctionMonitoring() {
+  const settings = getSettings();
+  const now = new Date();
+  
+  // Если включен режим "Только суббота" - проверяем день
+  if (getSetting('saturday_only_enabled') === 'ВКЛ' && now.getDay() !== 6) {
+    logDebug("Сегодня не суббота, автозапуск мониторинга пропущен.");
+    return;
   }
-}
 
-/**
- * Sets up periodic monitoring triggers
- */
-function setupPeriodicMonitoring() {
-  try {
-    // Get all current triggers
-    const triggers = ScriptApp.getProjectTriggers();
+  const allLots = getSheetData("Config");
+  const hasActive = allLots.some(l => l.data.status === "active" || l.data.status === "Активен");
+
+  if (hasActive) {
+    // Удаляем старый, если вдруг завис
+    deleteTriggerByName("periodicSystemCheck");
     
-    // Remove existing monitoring triggers to avoid duplicates
-    triggers.forEach(trigger => {
-      const handler = trigger.getHandlerFunction();
-      if (handler === 'periodicSystemCheck') {
-        ScriptApp.deleteTrigger(trigger);
-      }
-    });
-    
-    // Create new trigger to run every 10 minutes
-    ScriptApp.newTrigger('periodicSystemCheck')
+    // Создаем частый триггер на период финала
+    ScriptApp.newTrigger("periodicSystemCheck")
       .timeBased()
       .everyMinutes(10)
       .create();
     
-    Logger.log('Настроен периодический мониторинг (каждые 10 минут)');
-    Monitoring.recordEvent('PERIODIC_MONITORING_SETUP', {
-      frequency: 'every 10 minutes',
-      timestamp: new Date()
-    });
-    
-  } catch (error) {
-    Logger.log(`Ошибка при настройке периодического мониторинга: ${error.message}`);
-    Monitoring.recordEvent('PERIODIC_MONITORING_SETUP_ERROR', {
-      error: error.message
-    });
+    logInfo("🚀 Финал начался! Активирован 10-минутный мониторинг дедлайнов.");
   }
 }
 
 /**
- * Function to run when the script starts up
- * This ensures monitoring is properly set up
+ * РАБОЧИЙ ЦИКЛ: Проверяет дедлайны и очередь.
  */
-function onScriptStart() {
+function periodicSystemCheck() {
   try {
-    // Set up periodic monitoring
-    setupPeriodicMonitoring();
+    processEventQueue();
+
+    const now = new Date();
+    const expiredLots = getSheetData("Config").filter(row => 
+      (row.data.status === "active" || row.data.status === "Активен") && 
+      parseRussianDate(row.data.deadline) <= now
+    );
     
-    // Log startup
-    Monitoring.recordEvent('SCRIPT_STARTED', {
-      timestamp: new Date(),
-      version: '1.0.0'
-    });
-    
-    Logger.log('Скрипт запущен, мониторинг настроен');
+    if (expiredLots.length > 0) {
+      logInfo(`Найдено ${expiredLots.length} лотов с истекшим сроком. Финализируем...`);
+      finalizeAuction();
+    } else {
+      // Даже если просроченных нет, вызываем для проверки, не пора ли удалять триггер
+      sendAllSummaries();
+    }
+
   } catch (error) {
-    Logger.log(`Ошибка при запуске скрипта: ${error.message}`);
-    Monitoring.recordEvent('SCRIPT_STARTUP_ERROR', {
-      error: error.message
-    });
+    logError("periodicSystemCheck_error", error);
   }
 }
 
 /**
- * Function to run maintenance tasks
- * This can be scheduled to run daily
+ * ВСПОМОГАТЕЛЬНАЯ: Удаление триггера по имени
  */
+function deleteTriggerByName(name) {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === name) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
 function dailyMaintenance() {
   try {
-    // Clean up old logs (older than 30 days)
     cleanupOldLogs();
-    
-    // Check system health
-    const results = systemHealthCheck();
-    
-    // Log maintenance completion
-    Monitoring.recordEvent('DAILY_MAINTENANCE_COMPLETED', {
-      timestamp: new Date(),
-      checksPerformed: results.length,
-      issuesFound: results.filter(r => !r.passed).length
-    });
-    
+    systemHealthCheck();
+    Monitoring.recordEvent('DAILY_MAINTENANCE_COMPLETED', { timestamp: new Date() });
   } catch (error) {
-    Monitoring.recordEvent('DAILY_MAINTENANCE_ERROR', {
-      error: error.message,
-      stack: error.stack
-    });
-    Logger.log(`Ошибка в ежедневном обслуживании: ${error.message}`);
+    logError("daily_maintenance_error", error);
   }
 }
 
-/**
- * Cleans up old log entries
- */
 function cleanupOldLogs() {
   try {
     const daysToKeep = 30;
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-    
     const logSheet = getSheet("Logs");
     const values = logSheet.getDataRange().getValues();
-    
-    if (values.length <= 1) return; // Only header row
-    
-    // Find rows to delete (starting from bottom to avoid index shifting)
+    if (values.length <= 1) return;
     const rowsToDelete = [];
-    for (let i = values.length - 1; i >= 1; i--) { // Skip header row
-      const dateStr = values[i][0]; // Assuming date is in first column
-      
-      // Handle date strings or Date objects
-      let entryDate = dateStr;
-      if (typeof dateStr === 'string') {
-        // Try to parse "dd.MM.yyyy HH:mm:ss"
-        const parts = dateStr.split(' ');
-        if (parts.length >= 1) {
-          const dateParts = parts[0].split('.');
-          if (dateParts.length === 3) {
-            entryDate = new Date(dateParts[2], dateParts[1] - 1, dateParts[0]);
-          }
-        }
-      }
-      
+    for (let i = values.length - 1; i >= 1; i--) {
+      let entryDate = parseRussianDate(values[i][0]) || new Date(values[i][0]);
       if (entryDate instanceof Date && entryDate < cutoffDate) {
-        rowsToDelete.unshift(i + 1); // Convert to 1-indexed
+        rowsToDelete.push(i + 1);
       }
     }
-    
-    // Delete rows
-    for (const rowIndex of rowsToDelete) {
-      logSheet.deleteRow(rowIndex);
-    }
-    
-    if (rowsToDelete.length > 0) {
-      Monitoring.recordEvent('LOG_CLEANUP_PERFORMED', {
-        rowsDeleted: rowsToDelete.length,
-        cutoffDate: cutoffDate
-      });
-    }
-    
-  } catch (error) {
-    Monitoring.recordEvent('LOG_CLEANUP_ERROR', {
-      error: error.message
-    });
-    Logger.log(`Ошибка при очистке логов: ${error.message}`);
-  }
-}
-
-/**
- * Sets up daily maintenance trigger
- */
-function setupDailyMaintenance() {
-  try {
-    // Get all current triggers
-    const triggers = ScriptApp.getProjectTriggers();
-    
-    // Remove existing maintenance triggers to avoid duplicates
-    triggers.forEach(trigger => {
-      const handler = trigger.getHandlerFunction();
-      if (handler === 'dailyMaintenance') {
-        ScriptApp.deleteTrigger(trigger);
-      }
-    });
-    
-    // Create new trigger to run daily at 2 AM
-    ScriptApp.newTrigger('dailyMaintenance')
-      .timeBased()
-      .everyDays(1)
-      .atHour(2)
-      .create();
-    
-    Logger.log('Настроено ежедневное обслуживание (каждый день в 2:00)');
-    Monitoring.recordEvent('DAILY_MAINTENANCE_SETUP', {
-      frequency: 'daily at 2 AM',
-      timestamp: new Date()
-    });
-    
-  } catch (error) {
-    Logger.log(`Ошибка при настройке ежедневного обслуживания: ${error.message}`);
-    Monitoring.recordEvent('DAILY_MAINTENANCE_SETUP_ERROR', {
-      error: error.message
-    });
-  }
+    rowsToDelete.forEach(idx => logSheet.deleteRow(idx));
+  } catch (e) {}
 }

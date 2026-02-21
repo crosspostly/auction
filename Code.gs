@@ -1812,26 +1812,26 @@ function finalizeAuction() {
 function setupTriggers() {
   const ui = SpreadsheetApp.getUi();
   try {
-    // 1. Удаляем ВСЕ текущие триггеры проекта
     const triggers = ScriptApp.getProjectTriggers();
     triggers.forEach(t => ScriptApp.deleteTrigger(t));
 
-    // 2. Создаем триггер мониторинга (10 мин)
-    ScriptApp.newTrigger("periodicSystemCheck")
+    // 1. Главный будильник: запускает мониторинг в 21:00 каждый день
+    ScriptApp.newTrigger("startAuctionMonitoring")
       .timeBased()
-      .everyMinutes(10)
+      .atHour(21)
+      .everyDays(1)
       .create();
     
-    // 3. Создаем триггер обслуживания (ежедневно в 2 часа ночи)
+    // 2. Уборщик (раз в сутки в 2 ночи)
     ScriptApp.newTrigger("dailyMaintenance")
       .timeBased()
       .everyDays(1)
       .atHour(2)
       .create();
 
-    ui.alert("✅ Успех", "Старые триггеры удалены. Новые созданы:\n- periodicSystemCheck (раз в 10 мин)\n- dailyMaintenance (раз в сутки)", ui.ButtonSet.OK);
+    ui.alert("✅ Система инициализирована", "Создан ежедневный запуск в 21:00. Мониторинг будет включаться автоматически только во время финала аукциона.", ui.ButtonSet.OK);
   } catch (e) {
-    ui.alert("❌ Ошибка при создании триггеров: " + e.toString());
+    ui.alert("❌ Ошибка: " + e.toString());
   }
 }
 
@@ -2516,12 +2516,20 @@ function sendAllSummaries() {
   const now = new Date();
   const dateKey = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
   const propKey = "SUMMARY_SENT_" + dateKey;
-  if (props.getProperty(propKey) === "true") return;
+  
   const allLots = getSheetData("Config");
   const activeCount = allLots.filter(l => l.data.status === "active" || l.data.status === "Активен").length;
-  if (activeCount > 0) return;
+  
+  if (activeCount > 0) return; // Еще торгуются
+
+  // ЕСЛИ ВСЕ ЗАКРЫТО - УДАЛЯЕМ ЛИШНИЙ ТРИГГЕР (Самоликвидация)
+  deleteTriggerByName("periodicSystemCheck");
+
+  if (props.getProperty(propKey) === "true") return;
+
   const soldToday = allLots.filter(l => l.data.status === "Продан" || l.data.status === "sold");
   if (soldToday.length === 0) return;
+
   const winnersMap = {};
   soldToday.forEach(lot => {
     const userId = String(lot.data.leader_id);
@@ -2530,6 +2538,7 @@ function sendAllSummaries() {
       winnersMap[userId].push(lot.data);
     }
   });
+
   const winnersListForReport = [];
   for (const userId in winnersMap) {
     if (sendToWinners) {
@@ -2544,8 +2553,10 @@ function sendAllSummaries() {
     });
     Utilities.sleep(500);
   }
+
   if (winnersListForReport.length > 0) sendAdminReport(winnersListForReport);
   props.setProperty(propKey, "true");
+  logInfo("🏁 Аукцион завершен, сводки разосланы, триггер мониторинга удален.");
 }
 
 function sendAdminReport(winners) {
