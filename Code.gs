@@ -1771,11 +1771,29 @@ function finalizeAuction() {
   _sheet_data_mem_cache = {}; // Сбрасываем память
 
   const now = new Date();
-  const activeLots = getSheetData("Config").filter(row => {
+  const nowMSK = Utilities.formatDate(now, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+  logInfo(`🏁 finalizeAuction: Запуск финализации. Текущее время (MSK): ${nowMSK}`);
+  
+  const allLots = getSheetData("Config");
+  logInfo(`📊 Всего лотов в таблице: ${allLots.length}`);
+  
+  const activeLots = allLots.filter(row => {
     const deadline = parseRussianDate(row.data.deadline);
-    return (row.data.status === "active" || row.data.status === "Активен") && deadline && deadline <= now;
+    const isActive = (row.data.status === "active" || row.data.status === "Активен");
+    const isExpired = deadline && deadline <= now;
+    
+    // Логируем каждый активный лот для отладки
+    if (isActive) {
+      const deadlineStr = deadline ? Utilities.formatDate(deadline, "GMT+3", "dd.MM.yyyy HH:mm:ss") : "NULL";
+      const rawDeadline = row.data.deadline;
+      logInfo(`   🔍 Лот ${row.data.lot_id}: статус=${row.data.status}, дедлайн=${deadlineStr}, сырой=${rawDeadline}, истёк=${isExpired}`);
+    }
+    
+    return isActive && deadline && deadline <= now;
   });
-  Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length, now: now.toLocaleString() });
+  
+  logInfo(`✅ Найдено просроченных активных лотов: ${activeLots.length}`);
+  Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length, now: nowMSK });
 
   const allWinnersDataForReport = [];
   const allUsers = getSheetData("Users");
