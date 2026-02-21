@@ -52,24 +52,43 @@ function activateFrequentMonitoring() {
  */
 function periodicSystemCheck() {
   try {
-    processEventQueue();
+    // 1. Сначала полностью разгребаем очередь событий, чтобы не закрыть лот 
+    // до того, как последняя ставка запишется в таблицу.
+    let hasPending = true;
+    let safeguard = 0;
+    while (hasPending && safeguard < 5) { // Обрабатываем пачками до 50 событий за раз
+      processEventQueue();
+      const pendingCount = getSheetData("EventQueue").filter(e => e.data.status === "pending").length;
+      hasPending = pendingCount > 0;
+      safeguard++;
+      if (hasPending) Utilities.sleep(500); 
+    }
 
     const now = new Date();
-    const expiredLots = getSheetData("Config").filter(row => 
-      (row.data.status === "active" || row.data.status === "Активен") && 
-      parseRussianDate(row.data.deadline) <= now
-    );
+    // 2. Теперь ищем лоты, время которых реально вышло
+    const configData = getSheetData("Config");
+    const expiredLots = configData.filter(row => {
+      const deadline = parseRussianDate(row.data.deadline);
+      return (row.data.status === "active" || row.data.status === "Активен") && 
+             deadline && deadline <= now;
+    });
     
     if (expiredLots.length > 0) {
       logInfo(`Найдено ${expiredLots.length} лотов с истекшим сроком. Финализируем...`);
       finalizeAuction();
     } 
     
-    // ПРОВЕРКА ОСТАНОВКИ: если активных лотов больше нет - удаляем триггер
+    // 3. ПРОВЕРКА ОСТАНОВКИ: если активных лотов больше нет - рассылаем итоги и удаляем триггер
     const activeLots = getSheetData("Config").filter(row => row.data.status === "active" || row.data.status === "Активен");
     if (activeLots.length === 0) {
-      logInfo("✅ Все лоты обработаны. Останавливаю минутный мониторинг.");
+      logInfo("🏁 Все лоты обработаны. Рассылаю сводки.");
+      sendAllSummaries(); 
+      
+      // Удаляем триггер частой проверки, чтобы не тратить лимиты
       deleteTriggerByName("periodicSystemCheck");
+      
+      // На всякий случай запускаем очередь уведомлений
+      processNotificationQueue();
     }
 
   } catch (error) {

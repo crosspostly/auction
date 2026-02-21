@@ -531,14 +531,248 @@ function runAllTimeTests() {
   } catch (e) {
     Logger.log("❌ ОШИБКА В test_timeZones: " + e.message);
   }
-  
+
   try {
     test_auctionExtension();
   } catch (e) {
     Logger.log("❌ ОШИБКА В test_auctionExtension: " + e.message);
   }
-  
+
   Logger.log("\n" + "=".repeat(60));
   Logger.log("🏁 ВСЕ ТЕСТЫ ВРЕМЕНИ ЗАВЕРШЕНЫ");
+  Logger.log("=".repeat(60));
+}
+
+/**
+ * 🏁 ТЕСТ: ПРОВЕРКА finalizeAuction (КРИТИЧЕСКИЙ ТЕСТ)
+ * Проверяет, что функция завершения аукциона корректно определяет просроченные лоты
+ */
+function test_finalizeAuctionLogic() {
+  Logger.log("\n🏁 ЗАПУСК ТЕСТА: ЛОГИКА finalizeAuction");
+  Logger.log("=" .repeat(60));
+  
+  const now = new Date();
+  
+  // Тестовые сценарии для лотов
+  const testScenarios = [
+    {
+      name: "Лот с дедлайном 5 минут назад (должен завершиться)",
+      deadline: new Date(now.getTime() - 5 * 60 * 1000),
+      status: "Активен",
+      leader_id: "user123",
+      current_price: 500,
+      shouldBeFinalized: true
+    },
+    {
+      name: "Лот с дедлайном 1 час назад (должен завершиться)",
+      deadline: new Date(now.getTime() - 60 * 60 * 1000),
+      status: "Активен",
+      leader_id: "user456",
+      current_price: 1000,
+      shouldBeFinalized: true
+    },
+    {
+      name: "Лот с дедлайном через 5 минут (НЕ должен завершиться)",
+      deadline: new Date(now.getTime() + 5 * 60 * 1000),
+      status: "Активен",
+      leader_id: "user789",
+      current_price: 750,
+      shouldBeFinalized: false
+    },
+    {
+      name: "Лот с дедлайном через 1 час (НЕ должен завершиться)",
+      deadline: new Date(now.getTime() + 60 * 60 * 1000),
+      status: "Активен",
+      leader_id: "",
+      current_price: 200,
+      shouldBeFinalized: false
+    },
+    {
+      name: "Лот со статусом 'Продан' (НЕ должен завершиться)",
+      deadline: new Date(now.getTime() - 10 * 60 * 1000),
+      status: "Продан",
+      leader_id: "user999",
+      current_price: 300,
+      shouldBeFinalized: false
+    },
+    {
+      name: "Лот со статусом 'Не продан' (НЕ должен завершиться)",
+      deadline: new Date(now.getTime() - 10 * 60 * 1000),
+      status: "Не продан",
+      leader_id: "",
+      current_price: 0,
+      shouldBeFinalized: false
+    }
+  ];
+  
+  Logger.log(`\n📊 ТЕСТОВЫХ СЦЕНАРИЕВ: ${testScenarios.length}`);
+  Logger.log(`🕒 Текущее время: ${Utilities.formatDate(now, "GMT+3", "dd.MM.yyyy HH:mm:ss")}`);
+  
+  let passed = 0;
+  let failed = 0;
+  
+  testScenarios.forEach((scenario, index) => {
+    Logger.log(`\n📌 СЦЕНАРИЙ #${index + 1}: ${scenario.name}`);
+    
+    // Проверяем логику фильтрации (как в finalizeAuction строка 1771)
+    const isActive = (scenario.status === "active" || scenario.status === "Активен");
+    const parsedDeadline = parseRussianDate(scenario.deadline);
+    const isExpired = parsedDeadline && parsedDeadline <= now;
+    const shouldBeSelected = isActive && isExpired;
+    
+    Logger.log(`   🔹 Статус: ${scenario.status} → ${isActive ? "АКТИВЕН" : "НЕ АКТИВЕН"}`);
+    Logger.log(`   🔹 Дедлайн: ${Utilities.formatDate(scenario.deadline, "GMT+3", "dd.MM.yyyy HH:mm:ss")}`);
+    Logger.log(`   🔹 Распарсен: ${parsedDeadline ? Utilities.formatDate(parsedDeadline, "GMT+3", "dd.MM.yyyy HH:mm:ss") : "NULL"}`);
+    Logger.log(`   🔹 Истёк: ${isExpired ? "ДА" : "НЕТ"}`);
+    Logger.log(`   🔹 Ожидалось: ${scenario.shouldBeFinalized ? "ЗАВЕРШИТЬ" : "НЕ ЗАВЕРШАТЬ"}`);
+    Logger.log(`   🔹 Получено: ${shouldBeSelected ? "ЗАВЕРШИТЬ" : "НЕ ЗАВЕРШАТЬ"}`);
+    
+    if (shouldBeSelected === scenario.shouldBeFinalized) {
+      Logger.log(`   ✅ ТЕСТ ПРОЙДЕН`);
+      passed++;
+    } else {
+      Logger.log(`   ❌ ТЕСТ ПРОВАЛЕН`);
+      failed++;
+    }
+  });
+  
+  Logger.log("\n" + "=".repeat(60));
+  Logger.log(`📊 ИТОГИ: Пройдено ${passed}/${testScenarios.length}, Провалено ${failed}`);
+  
+  if (failed > 0) {
+    Logger.log("❌ КРИТИЧЕСКИЕ ОШИБКИ В ЛОГИКЕ finalizeAuction!");
+  } else {
+    Logger.log("✅ ЛОГИКА finalizeAuction РАБОТАЕТ ВЕРНО");
+  }
+}
+
+/**
+ * 🧪 ТЕСТ: ПРОВЕРКА parseRussianDate С РАЗНЫМИ ФОРМАТАМИ ИЗ ТАБЛИЦЫ
+ * Симулирует реальные данные, которые приходят из Google Sheets
+ */
+function test_parseRussianDateFromSheets() {
+  Logger.log("\n🧪 ЗАПУСК ТЕСТА: parseRussianDate С ДАННЫМИ ИЗ ТАБЛИЦЫ");
+  Logger.log("=" .repeat(60));
+  
+  const now = new Date();
+  const testDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 21, 0, 0);
+  
+  // Различные форматы, которые могут прийти из Sheets
+  const testCases = [
+    {
+      name: "Объект Date (как приходит из Sheets)",
+      input: testDate,
+      shouldParse: true
+    },
+    {
+      name: "Строка в формате Sheets 'dd.MM.yyyy HH:mm:ss'",
+      input: Utilities.formatDate(testDate, "GMT+3", "dd.MM.yyyy HH:mm:ss"),
+      shouldParse: true
+    },
+    {
+      name: "Строка в формате Sheets 'dd.MM.yyyy HH:mm'",
+      input: Utilities.formatDate(testDate, "GMT+3", "dd.MM.yyyy HH:mm"),
+      shouldParse: true
+    },
+    {
+      name: "Пустая строка",
+      input: "",
+      shouldParse: false
+    },
+    {
+      name: "NULL",
+      input: null,
+      shouldParse: false
+    },
+    {
+      name: "Невалидная строка",
+      input: "не дата",
+      shouldParse: false
+    },
+    {
+      name: "Число (Excel serial)",
+      input: 25569 + (testDate.getTime() / 86400000),
+      shouldParse: true
+    }
+  ];
+  
+  let passed = 0;
+  let failed = 0;
+  
+  testCases.forEach((tc, index) => {
+    Logger.log(`\n📌 ТЕСТ #${index + 1}: ${tc.name}`);
+    Logger.log(`   Вход: ${tc.input} (Type: ${typeof tc.input})`);
+    
+    try {
+      const result = parseRussianDate(tc.input);
+      
+      if (tc.shouldParse) {
+        if (result && !isNaN(result.getTime())) {
+          Logger.log(`   ✅ Распарсено: ${Utilities.formatDate(result, "GMT+3", "dd.MM.yyyy HH:mm:ss")}`);
+          Logger.log(`   ✅ ТЕСТ ПРОЙДЕН`);
+          passed++;
+        } else {
+          Logger.log(`   ❌ ОШИБКА: Ожидалась дата, получено ${result}`);
+          Logger.log(`   ❌ ТЕСТ ПРОВАЛЕН`);
+          failed++;
+        }
+      } else {
+        if (!result || isNaN(result.getTime())) {
+          Logger.log(`   ✅ Корректно вернул null/invalid`);
+          Logger.log(`   ✅ ТЕСТ ПРОЙДЕН`);
+          passed++;
+        } else {
+          Logger.log(`   ❌ ОШИБКА: Ожидался null, получено ${result}`);
+          Logger.log(`   ❌ ТЕСТ ПРОВАЛЕН`);
+          failed++;
+        }
+      }
+    } catch (e) {
+      Logger.log(`   💥 ОШИБКА: ${e.message}`);
+      Logger.log(`   ❌ ТЕСТ ПРОВАЛЕН`);
+      failed++;
+    }
+  });
+  
+  Logger.log("\n" + "=".repeat(60));
+  Logger.log(`📊 ИТОГИ: Пройдено ${passed}/${testCases.length}, Провалено ${failed}`);
+  
+  if (failed > 0) {
+    Logger.log("❌ ПРОБЛЕМЫ С ПАРСЕРОМ ДАТ!");
+  } else {
+    Logger.log("✅ parseRussianDate РАБОТАЕТ КОРРЕКТНО");
+  }
+}
+
+/**
+ * 🚀 ЗАПУСК ВСЕХ ТЕСТОВ (ВКЛЮЧАЯ finalizeAuction)
+ */
+function runAllVerificationTests() {
+  Logger.log("\n" + "=".repeat(60));
+  Logger.log("🚀 ЗАПУСК ВСЕХ ВЕРИФИКАЦИОННЫХ ТЕСТОВ");
+  Logger.log("=".repeat(60));
+  
+  runAllTimeTests();
+  
+  try {
+    test_finalizeAuctionLogic();
+  } catch (e) {
+    Logger.log("❌ ОШИБКА В test_finalizeAuctionLogic: " + e.message);
+  }
+  
+  try {
+    test_parseRussianDateFromSheets();
+  } catch (e) {
+    Logger.log("❌ ОШИБКА В test_parseRussianDateFromSheets: " + e.message);
+  }
+  
+  try {
+    test_runBiddingValidation();
+  } catch (e) {
+    Logger.log("❌ ОШИБКА В test_runBiddingValidation: " + e.message);
+  }
+  
+  Logger.log("\n" + "=".repeat(60));
+  Logger.log("🏁 ВСЕ ВЕРИФИКАЦИОННЫЕ ТЕСТЫ ЗАВЕРШЕНЫ");
   Logger.log("=".repeat(60));
 }

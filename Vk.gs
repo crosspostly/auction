@@ -31,10 +31,17 @@ function callVk(method, params, token = null, retryCount = 0) {
     v: String(API_VERSION)
   };
 
-  // ✅ Приводим ВСЕ параметры к строкам
+  // ✅ Приводим ВСЕ параметры к строкам, обрабатывая Даты корректно
   for (const key in params) {
-    if (params[key] !== null && params[key] !== undefined) {
-      cleanParams[key] = String(params[key]);
+    let val = params[key];
+    if (val !== null && val !== undefined) {
+      if (val instanceof Date) {
+        // Если это дата (случайно прилетела вместо ID), берем её числовое значение (timestamp)
+        // Но для VK ID лучше просто взять .getTime() если это реально дата от Sheets
+        cleanParams[key] = String(Math.floor(val.getTime() / 1000));
+      } else {
+        cleanParams[key] = String(val);
+      }
     }
   }
 
@@ -366,13 +373,19 @@ function enableCallbackEvents(groupId, serverId, eventsToEnable) {
   }
 }
 
-function sendMessage(userId, message) { 
-  const result = callVk("messages.send", { 
+function sendMessage(userId, message, attachments = "") { 
+  const params = { 
     user_id: String(userId), 
     random_id: String(Math.floor(Math.random()*1e9)), 
     message: message, 
     disable_mentions: 1 
-  }); 
+  };
+  
+  if (attachments) {
+    params.attachment = attachments;
+  }
+
+  const result = callVk("messages.send", params); 
   
   // Проверяем, была ли ошибка при отправке сообщения
   if (result && result.error) {
@@ -394,15 +407,15 @@ function sendMessage(userId, message) {
 }
 
 function getVkToken(isAdminAction = false) {
-  const props = PropertiesService.getScriptProperties();
+  const s = getSettings();
   if (isAdminAction) {
-    return props.getProperty("USER_TOKEN") || props.getProperty("VK_TOKEN");
+    return s.USER_TOKEN || s.VK_TOKEN;
   }
-  return props.getProperty("VK_TOKEN") || "";
+  return s.VK_TOKEN || "";
 }
 
 function getVkGroupId() {
-  const gid = PropertiesService.getScriptProperties().getProperty("GROUP_ID");
+  const gid = getSettings().GROUP_ID;
   return gid ? String(gid).replace("-", "") : "";
 }
 

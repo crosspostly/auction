@@ -1,6 +1,6 @@
 const SHEETS = {
   Config: { name: "Лоты", headers: ["lot_id", "post_id", "name", "start_price", "current_price", "leader_id", "status", "created_at", "deadline", "bid_step", "image_url", "attachment_id"] },
-  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id", "status", "post_id"] },
+  Bids: { name: "Ставки", headers: ["bid_id", "lot_id", "user_id", "bid_amount", "timestamp", "comment_id", "status", "post_id", "vk_timestamp"] },
   Users: { name: "Пользователи", headers: ["user_id", "user_name", "first_win_date", "last_win_date", "total_lots_won", "total_lots_paid", "shipping_status", "shipping_details"] },
   Orders: { name: "Заказы", headers: ["order_id", "lot_id", "lot_name", "post_id", "user_id", "win_date", "win_price", "status", "shipping_batch_id"] },
   Settings: { name: "Настройки", headers: ["setting_key", "setting_value", "description"] },
@@ -81,7 +81,6 @@ const DEFAULT_SETTINGS = {
 📦 П.С. Можете копить фигурки! Аукцион каждую субботу.
 Напишите ""КОПИТЬ"", если хотите накопить больше фигурок перед отправкой.`,
   low_bid_notification_template: `👋 Привет! Твоя ставка {your_bid}₽ по лоту «{lot_name}» чуть ниже текущей цены {current_bid}₽. Попробуй предложить больше, чтобы побороться за лот! 😉`,
-  winner_notification_template: `🎉 Выиграли лот {lot_name} за {price}₽!\nНапишите ""АУКЦИОН"".`,
   winner_comment_template: `Поздравляем с победой в аукционе за миниатюру! [id{user_id}|{user_name}] Напишите в сообщения группы \"Аукцион ({date})\", чтобы забрать свой лот`,
   unsold_lot_comment_template: `❌ Лот не продан`,
   subscription_required_template: `👋 Привет! Чтобы сделать ставку, нужно подписаться на нашу группу. Подпишись и попробуй снова! 📢`,
@@ -110,7 +109,6 @@ const SETTINGS_DESCRIPTIONS = {
   winner_comment_template: "Шаблон комментария о победе с упоминанием пользователя",
   unsold_lot_comment_template: "Шаблон комментария для не проданного лота",
   low_bid_notification_template: "Шаблон уведомления о низкой ставке",
-  winner_notification_template: "Шаблон уведомления победителю",
   subscription_required_template: "Шаблон уведомления о необходимости подписки",
   invalid_step_template: "Шаблон уведомления о некорректном шаге ставки",
   max_bid_exceeded_template: "Шаблон уведомления о превышении максимальной ставки",
@@ -134,6 +132,8 @@ const TOGGLE_SETTINGS = {
 };
 
 var _ss_cache = null;
+var _sheet_data_mem_cache = {}; // Memory cache for the current execution
+var _headers_verified = {};    // Cache for header verification status
 function cleanupSettingsSheet() {
   const sheet = getSheet('Settings');
   const values = sheet.getDataRange().getValues();
@@ -183,11 +183,12 @@ function getSheet(sheetKey) {
     }
   }
   
-  // ВАЖНО: Всегда проверяем и исправляем заголовки, если они изменились или сместились
-  ensureHeaders(sheet, config.headers);
-  
-  // Apply date formatting to known date columns
-  applyDateFormatting(sheet, config.headers);
+  // OPTIMIZATION: Only verify headers and formatting once per script execution
+  if (!_headers_verified[sheetKey]) {
+    ensureHeaders(sheet, config.headers);
+    applyDateFormatting(sheet, config.headers);
+    _headers_verified[sheetKey] = true;
+  }
   
   return sheet;
 }
@@ -231,6 +232,11 @@ function ensureHeaders(sheet, headers) {
 }
 
 function getSheetData(sheetKey) {
+  // OPTIMIZATION: Always check memory cache first (last for one execution)
+  if (_sheet_data_mem_cache[sheetKey]) {
+    return _sheet_data_mem_cache[sheetKey];
+  }
+  
   const cacheKey = 'sheet_' + sheetKey;
   
   // Determine if running interactively (user clicking in UI) vs. automatically (trigger, webapp)
@@ -242,26 +248,42 @@ function getSheetData(sheetKey) {
     isInteractive = false;
   }
   
-  // ONLY use cache for interactive sessions to speed up UI
-  if (isInteractive) {
-    const cached = CacheService.getScriptCache().get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
-    }
+  // Cache for interactive sessions to speed up UI
+  const cached = CacheService.getScriptCache().get(cacheKey);
+  if (cached) {
+    const data = JSON.parse(cached);
+    _sheet_data_mem_cache[sheetKey] = data; // Put into memory cache too
+    return data;
   }
 
   const sheet = getSheet(sheetKey);
   const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
+  if (values.length < 2) {
+    _sheet_data_mem_cache[sheetKey] = [];
+    return [];
+  }
   const headers = values[0];
+  const stringFields = ['lot_id', 'user_id', 'leader_id', 'attachment_id', 'comment_id', 'post_id', 'bid_id', 'order_id', 'queue_id', 'eventId'];
+
   const data = values.slice(1).map((row, index) => ({
     rowIndex: index + 2,
-    data: headers.reduce((acc, header, idx) => { acc[header] = row[idx]; return acc; }, {})
+    data: headers.reduce((acc, header, idx) => { 
+      if (header) {
+        let val = row[idx];
+        // FORCE STRING for IDs to prevent Date object conversion by Google Sheets
+        if (stringFields.includes(header) && val !== "" && val !== null && val !== undefined) {
+          acc[header] = String(val);
+        } else {
+          acc[header] = val;
+        }
+      }
+      return acc; 
+    }, {})
   }));
 
-  if (isInteractive) {
-    CacheService.getScriptCache().put(cacheKey, JSON.stringify(data), 120); // Cache for 2 minutes
-  }
+  // Store in both caches
+  _sheet_data_mem_cache[sheetKey] = data;
+  CacheService.getScriptCache().put(cacheKey, JSON.stringify(data), 120); // Cache for 2 minutes
 
   return data;
 }
@@ -270,12 +292,32 @@ function appendRow(sheetKey, rowData) {
   const sheet = getSheet(sheetKey);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   
+  const stringFields = ['lot_id', 'user_id', 'leader_id', 'attachment_id', 'comment_id', 'post_id', 'bid_id', 'order_id', 'queue_id', 'eventId'];
+  
   // Создаем массив данных строго по позициям заголовков в таблице
   const row = headers.map(headerName => {
     let val = rowData[headerName];
-    if (val === undefined) return "";
+    if (val === undefined || val === null) return "";
+    
+    // FORCE STRING for IDs to prevent auto-date formatting
+    if (stringFields.includes(headerName)) {
+      const sVal = String(val);
+      // Если это формула (начинается с =), записываем как есть, чтобы она работала
+      if (sVal.startsWith("=")) return sVal;
+      // Иначе защищаем апострофом
+      return "'" + sVal;
+    }
+
     if (val instanceof Date) {
       return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
+    }
+    // Если значение - объект (но не дата), превращаем в JSON строку
+    if (typeof val === 'object') {
+      try {
+        return JSON.stringify(val);
+      } catch (e) {
+        return String(val);
+      }
     }
     return val;
   });
@@ -298,29 +340,49 @@ function appendRow(sheetKey, rowData) {
   }
   
   SpreadsheetApp.flush(); 
-  CacheService.getScriptCache().remove('sheet_' + sheetKey); 
+  CacheService.getScriptCache().remove('sheet_' + sheetKey);
+  delete _sheet_data_mem_cache[sheetKey];
 }
 
 function updateRow(sheetKey, rowIndex, rowData) {
   const sheet = getSheet(sheetKey);
-  const values = sheet.getDataRange().getValues();
-  if (values.length === 0) return;
-  
-  const headers = values[0];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const range = sheet.getRange(rowIndex, 1, 1, headers.length);
-  const currentRowValues = range.getValues()[0];
   
-  const updatedRow = headers.map((h, i) => {
-    let val = rowData[h] !== undefined ? rowData[h] : currentRowValues[i];
+  // КЛЮЧЕВОЙ ФИКС: Считываем и значения, и формулы
+  const currentRowValues = range.getValues()[0];
+  const currentRowFormulas = range.getFormulas()[0];
+  
+  const stringFields = ['lot_id', 'user_id', 'leader_id', 'attachment_id', 'comment_id', 'post_id', 'bid_id', 'order_id', 'queue_id', 'eventId'];
+  
+  const updatedRow = headers.map((headerName, i) => {
+    // Если новое значение передано - берем его, иначе сохраняем то, что было (приоритет формуле)
+    let val = rowData[headerName] !== undefined ? rowData[headerName] : (currentRowFormulas[i] || currentRowValues[i]);
+    
+    if (val === null || val === undefined) return "";
+
+    // FORCE STRING for IDs to prevent auto-date formatting
+    if (stringFields.includes(headerName)) {
+      const sVal = String(val);
+      // Если это формула, не добавляем апостроф и не портим её
+      if (sVal.startsWith("=")) return sVal;
+      return sVal.startsWith("'") ? sVal : "'" + sVal;
+    }
+
     // --- FORCE DATE FORMATTING ---
     if (val instanceof Date) {
       return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
+    }
+    // Stringify objects
+    if (typeof val === 'object') {
+      try { return JSON.stringify(val); } catch (e) { return String(val); }
     }
     return val;
   });
   
   range.setValues([updatedRow]);
-  CacheService.getScriptCache().remove('sheet_' + sheetKey); // Always clear cache on write
+  CacheService.getScriptCache().remove('sheet_' + sheetKey);
+  delete _sheet_data_mem_cache[sheetKey];
 }
 
 function log(type, message, details) {
@@ -391,20 +453,14 @@ function upsertLot(lot) {
   const sheetKey = "Config";
   const rows = getSheetData(sheetKey);
   
-  // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Ищем по post_id, а не по lot_id. 
-  // Это позволит создавать разные записи для разных постов, даже если в тексте один и тот же номер лота.
-  const existing = rows.find(r => {
-    const rowPostId = extractIdFromFormula(r.data.post_id);
-    const newPostId = extractIdFromFormula(lot.post_id);
-    return rowPostId === newPostId;
-  });
+  const cleanPostId = extractIdFromFormula(lot.post_id);
+  const existing = rows.find(r => extractIdFromFormula(r.data.post_id) === cleanPostId);
   
-  // Format post_id as a clickable link if it looks like a valid VK post ID
-  if (lot.post_id && !String(lot.post_id).startsWith("=HYPERLINK")) {
-    // Escape double quotes just in case, though post_id shouldn't have them
-    const safePostId = String(lot.post_id).replace(/"/g, '""');
-    // Formula: =HYPERLINK("https://vk.com/wall-213_123"; "-213_123")
-    lot.post_id = `=HYPERLINK("https://vk.com/wall${safePostId}"; "${safePostId}")`;
+  // УБРАНО: Создание HYPERLINK формулы. 
+  // Теперь записываем просто чистый ID как строку.
+  if (lot.post_id) {
+    const id = cleanPostId.replace(/['"]/g, "");
+    lot.post_id = id; 
   }
 
   Monitoring.recordEvent('UPSERT_LOT_ATTEMPT', { 
@@ -420,13 +476,21 @@ function upsertLot(lot) {
   }
 }
 
-// Helper to extract plain ID from HYPERLINK formula if present
+// Helper to extract plain ID from HYPERLINK formula or forced string if present
 function extractIdFromFormula(val) {
   if (!val) return "";
-  const s = String(val);
-  if (s.startsWith("=HYPERLINK")) {
-    const match = s.match(/;\s*"([^"]+)"\)/i);
-    return match ? match[1] : s;
+  let s = String(val).trim();
+  
+  // 1. Remove leading apostrophe if present
+  if (s.startsWith("'")) s = s.substring(1);
+
+  // 2. If it's a HYPERLINK formula, extract the label (last quoted part)
+  if (s.toUpperCase().startsWith("=HYPERLINK")) {
+    const parts = s.match(/"([^"]+)"/g);
+    if (parts && parts.length >= 2) {
+      // The last part is the label (the ID)
+      return parts[parts.length - 1].replace(/"/g, "");
+    }
   }
   return s;
 }
@@ -454,25 +518,34 @@ function updateLot(postId, updates) {
   const rows = getSheetData(sheetKey);
   const searchId = extractIdFromFormula(postId);
   
-  const existing = rows.find(r => extractIdFromFormula(r.data.post_id) === String(searchId));
+  const existing = rows.find(r => extractIdFromFormula(r.data.post_id) === searchId);
   
   if (existing) {
-    // If updating post_id, wrap in HYPERLINK
-    if (updates.post_id && !String(updates.post_id).startsWith("=HYPERLINK")) {
-      const safeId = String(updates.post_id).replace(/"/g, '""');
-      updates.post_id = `=HYPERLINK("https://vk.com/wall${safeId}"; "${safeId}")`;
-    }
+    // УБРАНО: Логика, которая пыталась превратить post_id в формулу при каждом обновлении.
+    // Если нам нужно обновить сам ID (что редко), мы просто пишем то, что передали.
     updateRow(sheetKey, existing.rowIndex, updates);
   } else {
     logError("updateLot", "Lot not found by post_id: " + searchId);
   }
 }
 
-function getSettings() {
-  const cache = CacheService.getScriptCache();
-  const cached = cache.get("settings");
-  if (cached) return JSON.parse(cached);
+var _settings_mem_cache = null;
 
+function getSettings() {
+  // 1. Memory cache (fastest, current execution only)
+  if (_settings_mem_cache) return _settings_mem_cache;
+
+  const cache = CacheService.getScriptCache();
+  
+  // 2. Script cache (10 min)
+  const cached = cache.get("settings");
+  if (cached) {
+    const data = JSON.parse(cached);
+    _settings_mem_cache = data;
+    return data;
+  }
+
+  // 3. Physical Sheet read
   const values = getSheet("Settings").getDataRange().getValues();
   const settings = { ...DEFAULT_SETTINGS };
   
@@ -486,9 +559,10 @@ function getSettings() {
   }
 
   const props = PropertiesService.getScriptProperties().getProperties();
-  const keys = ["VK_TOKEN", "GROUP_ID", "CONFIRMATION_CODE", "VK_SECRET", "PAYMENT_PHONE", "PAYMENT_BANK", "WEB_APP_URL"];
+  const keys = ["VK_TOKEN", "USER_TOKEN", "GROUP_ID", "CONFIRMATION_CODE", "VK_SECRET", "PAYMENT_PHONE", "PAYMENT_BANK", "WEB_APP_URL"];
   keys.forEach(k => { if (props[k]) settings[k] = props[k]; });
 
+  _settings_mem_cache = settings;
   cache.put("settings", JSON.stringify(settings), 300);
   return settings;
 }
@@ -541,7 +615,7 @@ function createDemoData() {
 
   // --- ШАБЛОНЫ ---
   addIfMissing("--- ШАБЛОНЫ ---", "", "");
-  const templateKeys = ["order_summary_template", "winner_comment_template", "unsold_lot_comment_template", "outbid_notification_template", "low_bid_notification_template", "winner_notification_template", "subscription_required_template", "invalid_step_template", "max_bid_exceeded_template", "auction_finished_template"];
+  const templateKeys = ["order_summary_template", "winner_comment_template", "unsold_lot_comment_template", "low_bid_notification_template", "subscription_required_template", "invalid_step_template", "max_bid_exceeded_template", "auction_finished_template"];
   for (const key of templateKeys) {
     addIfMissing(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }

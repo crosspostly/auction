@@ -63,10 +63,16 @@ function doPost(e) {
     // --- End of Alien Group Protection ---
 
     // Process the event immediately
-    if (data.type) {
+    if (data.type && data.event_id) {
+      // Check if this specific VK event ID was already processed or enqueued
+      if (isEventProcessed(data.event_id)) {
+        logDebug("🚫 Duplicate event detected (VK event_id), skipping.", { event_id: data.event_id, type: data.type });
+        return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
+      }
+
       routeEvent(data);
       // We still enqueue it for history/debugging, but mark as processed
-      enqueueEvent(data, rawPayload, "processed");
+      enqueueEvent(data, rawPayload, "processed", data.event_id);
     }
     
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
@@ -83,21 +89,51 @@ function doPost(e) {
  * @param {object} data The parsed event data object.
  * @param {string} rawPayload The original, unparsed JSON string from the VK request.
  * @param {string} status Optional status, defaults to "pending".
+ * @param {string} vkEventId Optional unique event ID from VK.
  */
-function enqueueEvent(data, rawPayload, status = "pending") {
+function enqueueEvent(data, rawPayload, status = "pending", vkEventId = null) {
   try {
+    const finalEventId = vkEventId || Utilities.getUuid();
+    
+    // Safety check: if we're manually enqueuing, check for duplicates
+    if (status === "pending" && isEventProcessed(finalEventId)) {
+      return;
+    }
+
     appendRow("EventQueue", {
-      eventId: Utilities.getUuid(),
+      eventId: finalEventId,
       payload: rawPayload,
       status: status,
       receivedAt: new Date()
     });
     // Readable preview for monitoring
     const preview = (typeof rawPayload === 'object') ? JSON.stringify(rawPayload) : String(rawPayload || "");
-    Monitoring.recordEvent('EVENT_ENQUEUED', { payload_preview: preview.substring(0, 100) });
+    Monitoring.recordEvent('EVENT_ENQUEUED', { eventId: finalEventId, payload_preview: preview.substring(0, 100) });
   } catch (e) {
     logError('enqueueEvent_failed', e, { eventType: data.type });
   }
+}
+
+/**
+ * Checks if a VK event ID has already been recorded in the EventQueue sheet.
+ * @param {string} vkEventId - The event_id provided by VK Callback API.
+ * @returns {boolean} - true if the event exists, false otherwise.
+ */
+function isEventProcessed(vkEventId) {
+  if (!vkEventId) return false;
+  
+  // Use memory cache for fast check
+  const cacheKey = "event_seen_" + vkEventId;
+  if (CacheService.getScriptCache().get(cacheKey)) return true;
+
+  const events = getSheetData("EventQueue");
+  const exists = events.some(e => String(e.data.eventId) === String(vkEventId));
+  
+  if (exists) {
+    CacheService.getScriptCache().put(cacheKey, "1", 3600); // 1 hour
+  }
+  
+  return exists;
 }
 
 /**
@@ -956,6 +992,33 @@ function handleWallPostNew(payload) {
     logInfo("Пост не распаршен", (payload.object.text || "").substring(0, 50));
     return;
   }
+
+  // --- ЗАЩИТА ОТ ДУБЛЕЙ ЛОТОВ (ЖЕЛЕЗОБЕТОННАЯ) ---
+  // Ищем любой лот с таким же номером, созданный СЕГОДНЯ.
+  // Если лот уже есть (неважно, активен, продан или не продан) - игнорируем новый пост.
+  const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd.MM.yyyy");
+  
+  const existingLot = getSheetData("Config").find(r => {
+    // Проверяем номер лота
+    if (String(r.data.lot_id) !== String(lot.lot_id)) return false;
+    
+    // Проверяем дату создания (чтобы не блокировать лоты с таким же номером, но с прошлой недели)
+    const createdDate = parseRussianDate(r.data.created_at);
+    if (!createdDate) return false;
+    
+    const createdStr = Utilities.formatDate(createdDate, Session.getScriptTimeZone(), "dd.MM.yyyy");
+    return createdStr === todayStr;
+  });
+
+  if (existingLot) {
+    logInfo(`⚠️ Лот №${lot.lot_id} уже существует сегодня (статус: ${existingLot.data.status}). Игнорирую дублирующий пост.`, {
+      ignored_post_id: `${payload.object.owner_id}_${payload.object.id}`,
+      existing_post_id: existingLot.data.post_id
+    });
+    return;
+  }
+  // ----------------------------------------
+
   const newLotData = { 
     lot_id: String(lot.lot_id), 
     post_id: `${payload.object.owner_id}_${payload.object.id}`, 
@@ -1042,34 +1105,57 @@ function parseLotFromPost(postObject) {
     
     // Test mode check (Once per post)
     if (getSetting('test_mode_enabled') === 'ВКЛ') {
-      deadline = new Date(new Date().getTime() + 5 * 60 * 1000);
-      logInfo("🕒 РЕЖИМ ТЕСТИРОВАНИЯ ВКЛЮЧЕН. Дедлайн установлен на +5 минут.", { deadline });
+      const now = new Date();
+      deadline = new Date(now.getTime() + 5 * 60 * 1000);
+      logInfo("🕒 РЕЖИМ ТЕСТИРОВАНИЯ ВКЛЮЧЕН (МСК). Дедлайн установлен на +5 минут.", { deadline: Utilities.formatDate(deadline, "GMT+3", "dd.MM.yyyy HH:mm:ss") });
     }
 
+    let deadlineFound = false;
     for (const line of lines) {
       const nameMatch = line.match(/^(?:Лот|🎁Лот)\s*[-—]?\s*(.+)/i);
       if (nameMatch) {
         name = nameMatch[1].trim();
         continue;
       }
-    
-    if (getSetting('test_mode_enabled') !== 'ВКЛ') {
-      const deadlineMatch = line.match(/(?:Дедлайн|Дата окончания аукциона)\s*(\d{1,2}\.\d{1,2}\.\d{4})\s*в\s*(\d{1,2}:\d{2})\s*по МСК/i);
-      if (deadlineMatch) {
-        const [day, month, year] = deadlineMatch[1].split('.').map(Number);
-        const [hours, minutes] = deadlineMatch[2].split(':').map(Number);
-        deadline = new Date(year, month - 1, day, hours, minutes);
+      
+      const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
+      if (priceMatch) {
+        startPrice = Number(priceMatch[1]);
+        if (priceMatch[2]) bidStep = Number(priceMatch[2]);
         continue;
       }
-    }
-
-    const priceMatch = line.match(/^(?:👀Старт|Старт)\s*(\d+)\s*р(?:\s+и\s+шаг\s*[-—]?\s*(\d+)\s*р?)?/i);
-    if (priceMatch) {
-      startPrice = Number(priceMatch[1]);
-      if (priceMatch[2]) bidStep = Number(priceMatch[2]);
-      continue;
-    }
     
+      if (getSetting('test_mode_enabled') !== 'ВКЛ' && !deadlineFound) {
+        // Improved deadline parsing: handles "Дедлайн: 21.02.2026 13:41:00", "До 21.02 в 13:41", etc.
+        const deadlineLineMatch = line.match(/(?:Дедлайн|Дата окончания аукциона|Финал|Окончание)\s*[:—-]?\s*(\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?)\s*(?:в|at)?\s*(\d{1,2}[:.]\d{2}(?:[:.]\d{2})?)/i);
+        if (deadlineLineMatch) {
+          const datePart = deadlineLineMatch[1];
+          const timePart = deadlineLineMatch[2];
+          
+          const dateParts = datePart.split(/[./-]/).map(Number);
+          const timeParts = timePart.split(/[:.]/).map(Number);
+          
+          const day = dateParts[0];
+          const month = dateParts[1] - 1;
+          let year = dateParts[2] || new Date().getFullYear();
+          if (year < 100) year += 2000;
+          
+          const hours = timeParts[0];
+          const minutes = timeParts[1];
+          const seconds = timeParts[2] || 0;
+          
+          deadline = new Date(year, month, day, hours, minutes, seconds);
+          deadlineFound = true;
+          logInfo("✅ Дедлайн успешно распаршен", { line: line, parsed: deadline.toLocaleString() });
+          continue;
+        }
+      }
+    } // End of for (const line of lines)
+
+    if (!deadlineFound && getSetting('test_mode_enabled') !== 'ВКЛ') {
+      logInfo("⚠️ Дедлайн не найден в тексте поста. Будет использовано значение по умолчанию (+7 дней).", { 
+        text_preview: text.substring(0, 300) 
+      });
     }
     
     let imageUrl = "";
@@ -1131,24 +1217,65 @@ function updateBidStatus(bidId, newStatus) {
   }
 }
 
-// Helper to safely parse a date string in "dd.MM.yyyy HH:mm:ss" format
+// Helper to safely parse a date string in various formats
 function parseRussianDate(dateString) {
-  if (!dateString || typeof dateString !== 'string') {
-    return null;
+  if (!dateString) return null;
+  if (dateString instanceof Date) return dateString;
+  
+  // Handle Numbers (Excel-style serial dates)
+  if (typeof dateString === 'number') {
+    // 25569 = milliseconds between Jan 1 1900 and Jan 1 1970
+    return new Date((dateString - 25569) * 86400 * 1000);
   }
-  const parts = dateString.match(/(\d{2})\.(\d{2})\.(\d{4})\s*(\d{2}):(\d{2}):(\d{2})?/);
-  if (!parts) return null;
-  // new Date(year, monthIndex, day, hours, minutes, seconds)
-  return new Date(parts[3], parts[2] - 1, parts[1], parts[4] || 0, parts[5] || 0, parts[6] || 0);
+
+  let s = String(dateString).trim();
+  if (s.startsWith("'")) s = s.substring(1).trim(); // Clean apostrophe
+  
+  // 1. Try ISO format (often comes from JSON.parse of a Date object)
+  if (s.includes('T') && s.endsWith('Z')) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 2. Try primary Russian format
+  try {
+    return Utilities.parseDate(s, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+  } catch (e) {
+    try {
+      // 3. Try secondary Russian format (short time)
+      return Utilities.parseDate(s, "GMT+3", "dd.MM.yyyy HH:mm");
+    } catch (e2) {
+      // 4. Manual regex parsing for "dd.MM.yyyy HH:mm:ss" if Utilities.parseDate is too picky
+      const match = s.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\s*(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?/);
+      if (match) {
+        const day = Number(match[1]);
+        const month = Number(match[2]) - 1;
+        let year = Number(match[3]);
+        if (year < 100) year += 2000;
+        const hour = Number(match[4]);
+        const min = Number(match[5]);
+        const sec = match[6] ? Number(match[6]) : 0;
+        return new Date(year, month, day, hour, min, sec);
+      }
+      
+      // 5. Last resort: standard JS parse
+      const dJS = new Date(s);
+      if (!isNaN(dJS.getTime())) return dJS;
+
+      logError("parseRussianDate", "Failed to parse date string", { original: dateString, string: s });
+      return null;
+    }
+  }
 }
 
 
 function handleWallReplyNew(payload) {
   const comment = payload.object || {};
+  const vkTimestamp = comment.date ? new Date(comment.date * 1000) : new Date();
 
   // --- HARD SELF-REPLY BLOCK ---
   if (comment.from_id < 0) {
-    return; 
+    return;
   }
   // -----------------------------
 
@@ -1238,9 +1365,17 @@ function handleWallReplyNew(payload) {
         user_id: userId,
         bid_amount: bid,
         timestamp: new Date(),
+        vk_timestamp: vkTimestamp,
         comment_id: comment.id,
         status: "некорректная"
       });
+
+      // ПРОВЕРКА: Не отвечали ли мы уже на этот комментарий
+      const postOwnerId = parsePostKey(postKey).postId;
+      if (checkIfBotReplied(postOwnerId, comment.id)) {
+        logInfo(`💬 Ответ на комментарий ${comment.id} уже существует, пропускаем.`);
+        return;
+      }
 
       // ВСЕГДА отвечаем пользователю в комментариях, почему ставка не принята
       const errorMessage = `Ставка ${bid}₽ не принята. ${validationResult.reason}`;
@@ -1276,6 +1411,7 @@ function handleWallReplyNew(payload) {
       user_id: userId,
       bid_amount: bid,
       timestamp: new Date(),
+      vk_timestamp: vkTimestamp,
       comment_id: comment.id,
       status: "лидер"
     });
@@ -1291,13 +1427,15 @@ function handleWallReplyNew(payload) {
       const AUCTION_EXTENSION_DURATION_MINUTES = 10;
       if (currentLot.deadline) {
         const now = new Date();
-        const deadlineTime = new Date(currentLot.deadline);
-        const timeUntilDeadline = (deadlineTime.getTime() - now.getTime()) / (1000 * 60);
-        if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > -AUCTION_EXTENSION_DURATION_MINUTES) { // Продлеваем даже если чуть просрочено, но лот активен
-          const newDeadline = new Date(deadlineTime.getTime() + AUCTION_EXTENSION_DURATION_MINUTES * 60 * 1000);
-          updateLot(currentLot.lot_id, { deadline: newDeadline });
-          logInfo(`Аукцион продлен до ${newDeadline.toLocaleString()}`);
-          Monitoring.recordEvent('AUCTION_EXTENDED', { lot_id: currentLot.lot_id, new_deadline: newDeadline });
+        const deadlineTime = parseRussianDate(currentLot.deadline);
+        if (deadlineTime) {
+          const timeUntilDeadline = (deadlineTime.getTime() - now.getTime()) / (1000 * 60);
+          if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > -AUCTION_EXTENSION_DURATION_MINUTES) { // Продлеваем даже если чуть просрочено, но лот активен
+            const newDeadline = new Date(deadlineTime.getTime() + AUCTION_EXTENSION_DURATION_MINUTES * 60 * 1000);
+            updateLot(currentLot.lot_id, { deadline: newDeadline });
+            logInfo(`Аукцион продлен до ${newDeadline.toLocaleString()}`);
+            Monitoring.recordEvent('AUCTION_EXTENDED', { lot_id: currentLot.lot_id, new_deadline: newDeadline });
+          }
         }
       }
     } else {
@@ -1310,12 +1448,14 @@ function handleWallReplyNew(payload) {
       const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid });
       try {
         if (oldLeaderBid.data.comment_id) {
-           // Проверяем, не отвечали ли мы ему уже
-           if (!checkIfBotReplied(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id)) {
-              replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
-              updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен");
-              logDebug(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке в комментариях`);
-           }
+          // ПРОВЕРКА: Не отвечали ли мы уже на этот комментарий
+          if (!checkIfBotReplied(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id)) {
+            replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
+            updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен");
+            logDebug(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке в комментариях`);
+          } else {
+            logInfo(`💬 Ответ на комментарий ${oldLeaderBid.data.comment_id} уже существует, пропускаем.`);
+          }
         }
       } catch (e) {
         logError("reply_outbid", e);
@@ -1421,25 +1561,23 @@ function buildWinnerMessage(p) {
   const paymentPhone = props.PAYMENT_PHONE || '';
   const paymentBank = props.PAYMENT_BANK || '';
 
-  // Use winner-specific template ONLY from settings
-  const template = settings.winner_notification_template ||
-                   settings.order_summary_template ||
+  // Use the only available summary template
+  const template = settings.order_summary_template ||
                    "Ошибка: шаблон не найден в Настройках. Обратитесь к администратору.";
   
-  logDebug("buildWinnerMessage: Using template from settings", { 
-    has_winner_setting: !!settings.winner_notification_template,
-    has_order_summary_setting: !!settings.order_summary_template,
-    template_length: template.length,
-    lot_name: p.lot_name,
-    price: p.price
+  logDebug("buildWinnerMessage: Using summary template from settings", { 
+    has_template: !!settings.order_summary_template,
+    template_length: template.length
   });
 
   return template
-    .replace(/{lot_name}/g, p.lot_name || 'неизвестный лот')  // Use global replace and fallback
-    .replace(/{price}/g, p.price || '0')                     // Use global replace and fallback
+    .replace(/{LOTS_LIST}/g, `- Лот "${p.lot_name}" - ${p.price}₽\n`)
+    .replace(/{LOTS_TOTAL}/g, p.price || '0')
+    .replace(/{ITEM_COUNT}/g, "1")
+    .replace(/{DELIVERY_COST}/g, "---") // Single lot delivery unknown here
+    .replace(/{TOTAL_COST}/g, p.price || '0')
     .replace(/{PAYMENT_BANK}/g, paymentBank)
-    .replace(/{PAYMENT_PHONE}/g, paymentPhone)
-    .replace(/{group_id}/g, p.group_id || getVkGroupId());
+    .replace(/{PAYMENT_PHONE}/g, paymentPhone);
 }
 
 function buildLowBidMessage(p) {
@@ -1578,7 +1716,10 @@ function checkAndFinalizeAuctions() {
   }
 
   // Проверяем, прошел ли дедлайн хотя бы у одного лота.
-  const isAnyDeadlinePassed = activeLots.some(row => parseRussianDate(row.data.deadline) < now);
+  const isAnyDeadlinePassed = activeLots.some(row => {
+    const deadline = parseRussianDate(row.data.deadline);
+    return deadline && deadline < now;
+  });
   if (!isAnyDeadlinePassed) {
     // Еще не время, ни один аукцион номинально не завершился.
     return;
@@ -1623,8 +1764,18 @@ function checkAndFinalizeAuctions() {
 }
 
 function finalizeAuction() {
-  const activeLots = getSheetData("Config").filter(row => row.data.status === "Активен" && parseRussianDate(row.data.deadline) < new Date());
-  Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  SpreadsheetApp.flush(); // Принудительно сохраняем все изменения
+  CacheService.getScriptCache().remove("sheet_Config"); // Сбрасываем кэш
+  CacheService.getScriptCache().remove("sheet_Bids");
+  _sheet_data_mem_cache = {}; // Сбрасываем память
+
+  const now = new Date();
+  const activeLots = getSheetData("Config").filter(row => {
+    const deadline = parseRussianDate(row.data.deadline);
+    return (row.data.status === "active" || row.data.status === "Активен") && deadline && deadline <= now;
+  });
+  Monitoring.recordEvent('AUCTION_FINALIZATION_STARTED', { active_lots_count: activeLots.length, now: now.toLocaleString() });
 
   const allWinnersDataForReport = [];
   const allUsers = getSheetData("Users");
@@ -1644,6 +1795,10 @@ function finalizeAuction() {
       // 1. СРАЗУ МЕНЯЕМ СТАТУС (Критично для остановки петли)
       updateLot(lot.post_id, { status: "Продан" });
 
+      // ПРОВЕРКА: Если заказ по этому посту уже есть - не дублируем
+      const existingOrders = getSheetData("Orders");
+      const isAlreadyOrdered = existingOrders.some(o => extractIdFromFormula(o.data.post_id) === String(parsePostKey(lot.post_id).postId));
+      
       const newOrder = {
         order_id: `${lot.lot_id}-${winnerId}`,
         lot_id: lot.lot_id,
@@ -1655,7 +1810,12 @@ function finalizeAuction() {
         status: 'Ожидает оплаты',
         shipping_batch_id: ''
       };
-      appendRow("Orders", newOrder);
+
+      if (!isAlreadyOrdered) {
+        appendRow("Orders", newOrder);
+      } else {
+        logDebug("Заказ по посту " + lot.post_id + " уже существует, пропускаем запись.");
+      }
 
       const existingUser = allUsers.find(u => String(u.data.user_id) === winnerId);
       if (existingUser) {
@@ -1678,11 +1838,9 @@ function finalizeAuction() {
         allUsers.push({ data: newUser, rowIndex: -1 });
       }
       
-      // Отправляем уведомление победителю в ЛС только если включена настройка отправки ЛС победителям
-      if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
-        const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price, group_id: getVkGroupId() } };
-        queueNotification(notification);
-      }
+      // --- УДАЛЕНО: Прямая отправка ЛС отсюда ---
+      // Сводки будут отправлены функцией sendAllSummaries() 
+      // когда закроются ВООБЩЕ ВСЕ лоты аукциона.
 
       const bidsForWinner = getSheetData("Bids").filter(b => b.data.lot_id === lot.lot_id && b.data.user_id === lot.leader_id);
       if (bidsForWinner.length > 0) {
@@ -1697,7 +1855,12 @@ function finalizeAuction() {
             user_id: lot.leader_id,
             user_name: getUserName(lot.leader_id)
           });
-          replyToComment(postId, latestBid.data.comment_id, winnerComment);
+          // ПРОВЕРКА: Не отвечали ли мы уже на этот комментарий
+          if (!checkIfBotReplied(postId, latestBid.data.comment_id)) {
+            replyToComment(postId, latestBid.data.comment_id, winnerComment);
+          } else {
+            logInfo(`💬 Ответ на комментарий победителя ${latestBid.data.comment_id} уже существует, пропускаем.`);
+          }
         } else {
           const today = new Date();
           const formattedDate = `${("0" + today.getDate()).slice(-2)}.${("0" + (today.getMonth() + 1)).slice(-2)}.${today.getFullYear()}`;
@@ -1730,7 +1893,7 @@ function finalizeAuction() {
 
       Monitoring.recordEvent('WINNER_DECLARED', newOrder);
     }
-    Utilities.sleep(1000); // Пауза 1 секунда между обработкой лотов
+    Utilities.sleep(300); // 0.3s instead of 1s
   });
 
   if (allWinnersDataForReport.length > 0) {
@@ -1829,8 +1992,20 @@ function processAdminReplies() {
 
 function buildPostKey(ownerId, postId) { return `${ownerId}_${postId}`; }
 function parsePostKey(postKey) {
-  const parts = String(postKey).split("_");
-  return parts.length === 2 ? { ownerId: Number(parts[0]), postId: Number(parts[1]) } : { ownerId: null, postId: Number(postKey) };
+  if (!postKey) return { ownerId: null, postId: null };
+  
+  // Clean the key (hyperlink, apostrophe, quotes)
+  const cleanKey = extractIdFromFormula(postKey).replace(/['"]/g, '').trim();
+  
+  if (cleanKey.indexOf("_") > -1) {
+    const parts = cleanKey.split("_");
+    // Если первый символ '-', это владелец (группа). parts[0] может быть "-213692606"
+    return { ownerId: Number(parts[0]), postId: Number(parts[1]) };
+  } else {
+    // Если только одно число - значит это чистый post_id
+    const pid = Number(cleanKey);
+    return { ownerId: null, postId: isNaN(pid) ? cleanKey : pid };
+  }
 }
 
 /**
@@ -2190,67 +2365,6 @@ function generateHealthSummary(results) {
 }
 
 /**
- * Automatic system repair function that fixes common issues
- */
-/**
- * Adds an event to the EventQueue for asynchronous processing.
- * @param {string} payload - The raw JSON payload from VK API.
- */
-/**
- * Processes events from the EventQueue.
- * This function is triggered every minute by a time-based trigger.
- */
-function processEventQueue(L) {
-  // Если вызвана триггером, L будет объектом события. Проверяем, функция ли это.
-  const logger = (typeof L === 'function') ? L : ((msg, data) => logDebug(msg, data));
-
-  const rows = getSheetData("EventQueue");
-  logger(`[DEBUG] processEventQueue started. Found ${rows.length} total rows.`);
-  let processed = 0;
-  
-  for (const row of rows) {
-    if (processed >= 50) {
-      logger(`[DEBUG] Hit processing limit of 50.`);
-      break;
-    }
-    
-    const eventId = row.data.eventId || 'no_id';
-    const currentStatus = String(row.data.status || "").toLowerCase().trim();
-    logger(`[DEBUG] Row ${row.rowIndex}: ID=${eventId}, Status='${currentStatus}'.`);
-
-    if (currentStatus !== "pending") {
-      continue;
-    }
-    
-    logger(`[DEBUG] Processing row ${row.rowIndex}...`);
-    try {
-      const payload = JSON.parse(row.data.payload);
-      logger(`[DEBUG] Routing event type: ${payload.type}`);
-      routeEvent(payload);
-      
-      updateRow("EventQueue", row.rowIndex, { 
-        status: "processed", 
-        receivedAt: row.data.receivedAt
-      });
-      
-      processed++;
-      logger(`[DEBUG] Row ${row.rowIndex} successfully processed.`);
-      Monitoring.recordEvent('EVENT_PROCESSED', { eventId: row.data.eventId, eventType: payload.type });
-    } catch (error) {
-      logError('processEventQueue', error, row.data.payload);
-      updateRow("EventQueue", row.rowIndex, { 
-        status: "failed", 
-        receivedAt: row.data.receivedAt 
-      });
-      logger(`[DEBUG] Row ${row.rowIndex} failed to process: ${error.message}`);
-      Monitoring.recordEvent('EVENT_PROCESSING_FAILED', { 
-        eventId: row.data.eventId, 
-        error: error.message,
-        payload: String(row.data.payload || "").substring(0, 200)
-      });
-    }
-  }
-}/**
  * @fileoverview Additional VK event handlers for reply edit/delete events
  */
 
@@ -2439,42 +2553,46 @@ function findLotByLotId(lotId) {
 }
 
 function sendAllSummaries() {
-  const settings = getSettings();
-  const sendToWinners = (getSetting("send_winner_dm_enabled") === "ВКЛ"); 
-  const props = PropertiesService.getScriptProperties();
-  const now = new Date();
-  const dateKey = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
-  const propKey = "SUMMARY_SENT_" + dateKey;
-  
   const allLots = getSheetData("Config");
   const activeLots = allLots.filter(l => l.data.status === "active" || l.data.status === "Активен");
   
   if (activeLots.length > 0) {
-    logDebug("Рассылка отложена: еще есть активные лоты (" + activeLots.length + ").");
+    logDebug(`Рассылка отложена: есть активные лоты (${activeLots.length}).`);
     return;
   }
 
-  // ЕСЛИ ВСЕ ЗАКРЫТО - УДАЛЯЕМ ТРИГГЕР
-  deleteTriggerByName("periodicSystemCheck");
+  const props = PropertiesService.getScriptProperties();
+  const notifiedLotsProp = props.getProperty("NOTIFIED_LOT_IDS") || "[]";
+  let notifiedLotIds = JSON.parse(notifiedLotsProp);
 
-  if (props.getProperty(propKey) === "true") return;
-
-  // Фильтруем лоты, проданные СЕГОДНЯ (или у которых дедлайн совпадает с сегодняшним днем)
+  const now = new Date();
   const todayStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd.MM.yyyy");
-  const soldToday = allLots.filter(l => {
+
+  const soldLots = allLots.filter(l => {
     const status = String(l.data.status).toLowerCase();
     const isSold = (status === "продан" || status === "sold");
-    const deadline = String(l.data.deadline);
-    return isSold && deadline.includes(todayStr); // Проверка на сегодняшнюю дату
+    if (!isSold) return false;
+
+    // 1. Проверяем, что лот не был уведомлен ранее
+    const isNotified = notifiedLotIds.includes(String(l.data.lot_id));
+    if (isNotified) return false;
+
+    // 2. Проверяем, что дедлайн лота - СЕГОДНЯ
+    // Это гарантирует, что мы не трогаем прошлую неделю
+    const deadlineDate = parseRussianDate(l.data.deadline);
+    if (!deadlineDate) return false;
+    
+    const deadlineStr = Utilities.formatDate(deadlineDate, Session.getScriptTimeZone(), "dd.MM.yyyy");
+    return deadlineStr === todayStr;
   });
 
-  if (soldToday.length === 0) {
-    logDebug("Сегодня не было продано ни одного лота.");
+  if (soldLots.length === 0) {
+    logDebug("Новых проданных лотов для рассылки нет.");
     return;
   }
 
   const winnersMap = {};
-  soldToday.forEach(lot => {
+  soldLots.forEach(lot => {
     const userId = String(lot.data.leader_id);
     if (userId && userId !== "") {
       if (!winnersMap[userId]) winnersMap[userId] = [];
@@ -2483,26 +2601,36 @@ function sendAllSummaries() {
   });
 
   const winnersListForReport = [];
+  const sendToWinners = (getSetting("send_winner_dm_enabled") === "ВКЛ"); 
+
   for (const userId in winnersMap) {
-    if (sendToWinners) {
-      const summary = buildUserOrderSummary(userId);
-      if (!summary.startsWith("У вас нет")) {
-        sendMessage(userId, summary);
-        logInfo("✉️ Сводка за сегодня отправлена победителю " + userId);
-      }
-    }
-    winnersMap[userId].forEach(lot => {
+    const userLots = winnersMap[userId];
+    const attachments = [];
+    
+    userLots.forEach(lot => {
+      if (lot.attachment_id) attachments.push(lot.attachment_id);
       winnersListForReport.push({
         lot_id: lot.lot_id, name: lot.name, price: lot.current_price,
         winner_id: userId, winner_name: getUserName(userId), attachment_id: lot.attachment_id
       });
+      notifiedLotIds.push(String(lot.lot_id));
     });
+
+    if (sendToWinners) {
+      const summary = buildUserOrderSummary(userId);
+      if (summary && !summary.startsWith("У вас нет")) {
+        sendMessage(userId, summary, attachments.join(","));
+        logInfo(`✉️ Сводка отправлена победителю ${userId} (лотов: ${userLots.length})`);
+      }
+    }
     Utilities.sleep(500);
   }
 
-  if (winnersListForReport.length > 0) sendAdminReport(winnersListForReport);
-  props.setProperty(propKey, "true");
-  logInfo("🏁 Аукционный день завершен. Сводки за " + todayStr + " разосланы.");
+  if (winnersListForReport.length > 0) {
+    sendAdminReport(winnersListForReport);
+    props.setProperty("NOTIFIED_LOT_IDS", JSON.stringify(notifiedLotIds));
+    logInfo("🏁 Рассылка по завершенным лотам выполнена.");
+  }
 }
 
 function sendAdminReport(winners) {
@@ -2510,12 +2638,38 @@ function sendAdminReport(winners) {
   const parsedAdmins = parseAdminIds(settings.ADMIN_IDS);
   const adminIds = parsedAdmins.all;
   if (!adminIds || adminIds.length === 0) return;
-  let reportText = "🏆 ИТОГИ АУКЦИОНА 🏆\n\n";
-  winners.forEach((w, i) => {
-    reportText += (i+1) + ". Лот №" + w.lot_id + ": " + w.name + "\n";
-    reportText += "💰 Цена: " + w.price + "₽\n";
-    reportText += "👤 Победитель: [id" + w.winner_id + "|" + w.winner_name + "]\n";
-    reportText += "-------------------\n";
+
+  // Группируем по победителям
+  const winnersMap = {};
+  winners.forEach(w => {
+    if (!winnersMap[w.winner_id]) {
+      winnersMap[w.winner_id] = { name: w.winner_name, lots: [] };
+    }
+    winnersMap[w.winner_id].lots.push(w);
   });
-  adminIds.forEach(adminId => { try { sendMessage(adminId, reportText); } catch (e) {} });
+
+  // Для каждого победителя шлем админам отдельное сообщение со всеми его лотами
+  for (const winnerId in winnersMap) {
+    const winnerData = winnersMap[winnerId];
+    let reportText = `👤 Победитель: [id${winnerId}|${winnerData.name}]\n\n`;
+    const attachments = [];
+
+    winnerData.lots.forEach((lot, index) => {
+      reportText += `${index + 1}. Лот №${lot.lot_id}: ${lot.name}\n💰 Цена: ${lot.price}₽\n`;
+      if (lot.attachment_id) attachments.push(lot.attachment_id);
+    });
+
+    reportText += "\n-------------------";
+
+    // Рассылаем всем админам
+    adminIds.forEach(adminId => {
+      try {
+        sendMessage(adminId, reportText, attachments.join(","));
+      } catch (e) {
+        logError("admin_report_winner_failed", e, { adminId, winnerId });
+      }
+    });
+    
+    Utilities.sleep(500); // Небольшая пауза между победителями
+  }
 }
