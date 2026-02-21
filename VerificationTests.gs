@@ -4,14 +4,14 @@
  */
 function runFullDateCycleTest() {
   Logger.log("🚀 ЗАПУСК ПОЛНОГО ЦИКЛА ПРОВЕРКИ ДАТ");
-  
+
   const now = new Date();
-  
+
   // 1. Подготовка тестовых дат
   const datePast = new Date(now.getTime() - 5 * 60 * 1000); // -5 минут
   const dateFuture = new Date(now.getTime() + 5 * 60 * 1000); // +5 минут
   const dateFarFuture = new Date(now.getTime() + 24 * 60 * 60 * 1000); // +24 часа
-  
+
   const testLots = [
     { id: "TEST_PAST", name: "Лот в прошлом", deadline: datePast, expected: "EXPIRED" },
     { id: "TEST_FUTURE", name: "Лот в будущем", deadline: dateFuture, expected: "ACTIVE" },
@@ -20,7 +20,23 @@ function runFullDateCycleTest() {
 
   Logger.log(`🕒 Время теста: ${now.toLocaleString()}`);
 
-  // 2. ЗАПИСЬ (Имитация реального upsertLot/appendRow)
+  // 0. ОЧИСТКА: Удаляем старые тестовые лоты перед записью
+  Logger.log("🧹 Очистка старых тестовых записей...");
+  const configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Лоты");
+  const configData = configSheet.getDataRange().getValues();
+  const headers = configData[0];
+  const lotIdIndex = headers.indexOf("lot_id");
+  
+  // Идем с конца, чтобы удалять корректно
+  for (let i = configData.length - 1; i >= 1; i--) {
+    const lotId = String(configData[i][lotIdIndex]);
+    if (lotId.startsWith("TEST_")) {
+      configSheet.deleteRow(i + 1);
+      Logger.log(`   Удалён старый тестовый лот: ${lotId}`);
+    }
+  }
+
+  // 1. ЗАПИСЬ (Имитация реального upsertLot/appendRow)
   testLots.forEach(t => {
     Logger.log(`📝 Записываю лот ${t.id} с дедлайном: ${t.deadline.toString()}`);
     // Используем appendRow как в основном коде
