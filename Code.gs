@@ -33,7 +33,7 @@ function doPost(e) {
     logDebug('📨 doPost called', {
       hasPostData: !!e.postData,
       contentLength: e.postData ? e.postData.length : 0,
-      contents: rawPayload.substring(0, 500)
+      contents: String(rawPayload || "").substring(0, 500)
     });
 
     // For confirmation requests, reply immediately with the confirmation code.
@@ -62,14 +62,17 @@ function doPost(e) {
     }
     // --- End of Alien Group Protection ---
 
-    // Queue the event for asynchronous processing and immediately return "ok".
+    // Process the event immediately
     if (data.type) {
-      enqueueEvent(data, rawPayload);
+      routeEvent(data);
+      // We still enqueue it for history/debugging, but mark as processed
+      enqueueEvent(data, rawPayload, "processed");
     }
     
-    return ContentService.createTextOutput("ok").setMMimeType(ContentService.MimeType.TEXT);
+    return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
   } catch (error) {
-    logError('doPost_critical', error, e.postData ? e.postData.contents : 'no post data');
+    const rawContent = (e.postData && e.postData.contents) ? String(e.postData.contents) : 'no post data';
+    logError('doPost_critical', error, rawContent);
     // Always return "ok" even on error, so VK doesn't disable the server.
     return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
   }
@@ -79,15 +82,19 @@ function doPost(e) {
  * Enqueues a VK event into the 'EventQueue' sheet for reliable, asynchronous processing.
  * @param {object} data The parsed event data object.
  * @param {string} rawPayload The original, unparsed JSON string from the VK request.
+ * @param {string} status Optional status, defaults to "pending".
  */
-function enqueueEvent(data, rawPayload) {
+function enqueueEvent(data, rawPayload, status = "pending") {
   try {
     appendRow("EventQueue", {
       eventId: Utilities.getUuid(),
       payload: rawPayload,
-      status: "pending",
+      status: status,
       receivedAt: new Date()
     });
+    // Readable preview for monitoring
+    const preview = (typeof rawPayload === 'object') ? JSON.stringify(rawPayload) : String(rawPayload || "");
+    Monitoring.recordEvent('EVENT_ENQUEUED', { payload_preview: preview.substring(0, 100) });
   } catch (e) {
     logError('enqueueEvent_failed', e, { eventType: data.type });
   }
@@ -966,6 +973,12 @@ function handleWallPostNew(payload) {
   upsertLot(newLotData);
   Monitoring.recordEvent('LOT_CREATED', newLotData);
   logInfo(`Лот №${lot.lot_id} добавлен`);
+
+  // Если включен тестовый режим, активируем триггер мониторинга сразу
+  if (getSetting('test_mode_enabled') === 'ВКЛ') {
+    logInfo("🚀 Тестовый режим: запуск немедленного мониторинга завершения.");
+    activateFrequentMonitoring();
+  }
 }
 function parseLotFromPost(postObject) {
   try {
@@ -1139,84 +1152,73 @@ function handleWallReplyNew(payload) {
   }
   // -----------------------------
 
-  // --- Robust Deduplication using Sheets ---
-  if (isBidExists(comment.id)) {
-    logInfo("🚫 Duplicate comment event detected from Bids sheet, skipping.", { comment_id: comment.id, text: comment.text });
-    Monitoring.recordEvent('DUPLICATE_COMMENT_SKIPPED_FROM_SHEET', { comment_id: comment.id });
-    return; // Stop processing immediately
-  }
-  // --- End of Deduplication ---
-
-  const ownerId = payload.group_id || getVkGroupId(); // Получаем group_id из payload или настройки
-  
-  // Enhanced debug log at the very start
-  logDebug('🎤 handleWallReplyNew received', {
-    from_id: comment.from_id,
-    text: comment.text,
-    post_id: comment.post_id,
-    owner_id: ownerId
-  });
-
-  const postKey = `-${ownerId}_${comment.post_id}`; // Используем ownerId, добавляем минус для owner_id
-  
-  // ADDED: Detailed initial log
-  Monitoring.recordEvent('HANDLE_WALL_REPLY_NEW_START', { 
-    comment_id: comment.id, 
-    text: comment.text, 
-    postKey: postKey, 
-    from_id: comment.from_id 
-  });
-  
-  logDebug(`🔍 START handleWallReplyNew`, { 
-    comment_id: comment.id, 
-    text: comment.text, 
-    postKey: postKey, 
-    from_id: comment.from_id 
-  });
-
-  // --- Self-Reply Protection ---
-  const groupId = getVkGroupId(); 
-  const fromId = String(comment.from_id);
-  
-  if (fromId === `-${groupId}`) {
-    logDebug("🚫 Ignored self-reply (comment from bot).", { text: comment.text });
+  // --- 1. Fast Cache Check (Memeory-level idempotency) ---
+  const cache = CacheService.getScriptCache();
+  const cacheKey = "proc_comm_" + comment.id;
+  if (cache.get(cacheKey)) {
+    logDebug("🚫 Duplicate comment detected via Cache, skipping.", { comment_id: comment.id });
     return;
   }
-  // --- End of Self-Reply Protection ---
+  // Mark as processing immediately
+  cache.put(cacheKey, "1", 600); // Keep for 10 minutes
 
+  const ownerId = payload.group_id || getVkGroupId(); 
+  const postKey = `-${ownerId}_${comment.post_id}`; 
+  const userId = String(comment.from_id);
+
+  // --- 2. Robust Deduplication using Sheets ---
+  // Fast check before lock
+  if (isBidExists(comment.id)) {
+    logInfo("🚫 Duplicate comment event detected (fast check), skipping.", { comment_id: comment.id });
+    return; 
+  }
+
+  // --- Initial Lot Check (Fast Fail) ---
   const lot = findLotByPostId(postKey);
   if (!lot) {
-    // Тихо игнорируем, если это обычный пост (не аукцион)
-    // Мы логируем только если это явно был аукционный пост, но мы его не нашли в базе
     logDebug("Comment on untracked post ignored.", { postKey });
     return;
   }
-
+  
   if (lot.status !== "Активен") {
     Monitoring.recordEvent('HANDLE_WALL_REPLY_LOT_INACTIVE', { lot_id: lot.lot_id, status: lot.status });
     logInfo("⚠️ Лот найден, но он НЕ АКТИВЕН", { status: lot.status, lot_id: lot.lot_id });
     return;
   }
 
+  // --- Self-Reply Protection ---
+  const groupId = getVkGroupId(); 
+  if (userId === `-${groupId}`) {
+    logDebug("🚫 Ignored self-reply (comment from bot).", { text: comment.text });
+    return;
+  }
+
   const bid = parseBid(comment.text || "");
-  const userId = String(comment.from_id);
-  
   if (!bid) {
     Monitoring.recordEvent('HANDLE_WALL_REPLY_NO_BID_PARSED', { text: comment.text });
     logDebug("⚠️ Comment text parsed as NO BID", { text: comment.text });
     return;
   }
 
-  // ADDED: Log parsed bid
-  Monitoring.recordEvent('HANDLE_WALL_REPLY_BID_PARSED', { lot_id: lot.lot_id, bid: bid, user_id: userId });
-  logDebug(`✅ Bid parsed: ${bid}`, { lot_id: lot.lot_id, current_price: lot.current_price });
-
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(5000);
-    const currentLot = findLotByPostId(postKey); // Re-fetch lot inside lock
+    // Wait for lock up to 5 seconds
+    if (!lock.tryLock(5000)) {
+       logInfo("⚠️ Could not acquire lock for comment " + comment.id + ", retrying later or skipping.");
+       return;
+    }
+
+    // --- CRITICAL SECTION START ---
+
+    // 1. Re-check existence inside lock (Double-Check Locking)
+    if (isBidExists(comment.id)) {
+      logInfo("🚫 Duplicate comment event detected (inside lock), skipping.", { comment_id: comment.id });
+      return;
+    }
+
+    const currentLot = findLotByPostId(postKey); // Re-fetch lot inside lock to get latest price
     
-    // Use enhanced validation
+    // Use enhanced validation (now without subscription check)
     const validationResult = enhancedValidateBid(bid, currentLot, userId);
     
     if (!validationResult.isValid) {
@@ -1248,55 +1250,39 @@ function handleWallReplyNew(payload) {
       } catch (e) {
         logError("reply_invalid_bid", e);
       }
-
-      // Ставим уведомление в очередь (для ЛС, если это критично)
-      const notification = {
-        user_id: userId,
-        type: validationResult.reason.includes("подписка") ? "subscription_required" : "low_bid",
-        payload: {
-          lot_id: currentLot.lot_id,
-          lot_name: currentLot.name,
-          current_bid: currentLot.current_price,
-          your_bid: bid,
-          post_id: postKey,
-          reason: validationResult.reason
-        }
-      };
-      queueNotification(notification);
       return;
     }
 
     // --- ОБРАБОТКА ВАЛИДНОЙ СТАВКИ ---
     
     // 1. Находим текущую лидирующую ставку по ЭТОМУ ЛОТУ и ЭТОМУ ПОСТУ
-    // Это критично для правильных ответов (Reply)
     const bids = getSheetData("Bids");
     const oldLeaderBid = bids.find(b => 
       b.data.lot_id === currentLot.lot_id && 
-      extractIdFromFormula(b.data.post_id) === String(parsePostKey(postKey).postId) && // ОШИБКА БЫЛА ТУТ: нужен конкретный пост
+      extractIdFromFormula(b.data.post_id) === String(parsePostKey(postKey).postId) && 
       b.data.status === "лидер"
     );
     
     if (oldLeaderBid) {
-      // Используем БЕЗОПАСНОЕ обновление по ID, так как индексы могли съехать
       updateBidStatus(oldLeaderBid.data.bid_id, "перебита");
     }
 
-    // 2. Записываем новую ставку как лидера
+    // 2. СНАЧАЛА ЗАПИСЫВАЕМ СТАВКУ (Защита от повторов)
     logDebug(`💾 Recording Valid Bid: ${bid}`);
     appendRow("Bids", {
       bid_id: Utilities.getUuid(),
       lot_id: currentLot.lot_id,
-      post_id: parsePostKey(postKey).postId, // Обязательно сохраняем ID поста для истории
+      post_id: parsePostKey(postKey).postId,
       user_id: userId,
       bid_amount: bid,
       timestamp: new Date(),
       comment_id: comment.id,
       status: "лидер"
     });
-    
-    updateLot(currentLot.lot_id, { current_price: bid, leader_id: userId });
-    logDebug(`✅ Lot Updated: ${currentLot.lot_id} -> ${bid}`);
+
+    // 3. ТОЛЬКО ПОТОМ ОБНОВЛЯЕМ ЛОТ
+    updateLot(postKey, { current_price: bid, leader_id: userId });
+    logDebug(`✅ Lot Updated: ${postKey} -> ${bid}`);
     
     // ... (extension logic) ...
     const isTestMode = getSetting('test_mode_enabled') === 'ВКЛ';
@@ -1307,7 +1293,7 @@ function handleWallReplyNew(payload) {
         const now = new Date();
         const deadlineTime = new Date(currentLot.deadline);
         const timeUntilDeadline = (deadlineTime.getTime() - now.getTime()) / (1000 * 60);
-        if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > 0) {
+        if (timeUntilDeadline <= AUCTION_EXTENSION_WINDOW_MINUTES && timeUntilDeadline > -AUCTION_EXTENSION_DURATION_MINUTES) { // Продлеваем даже если чуть просрочено, но лот активен
           const newDeadline = new Date(deadlineTime.getTime() + AUCTION_EXTENSION_DURATION_MINUTES * 60 * 1000);
           updateLot(currentLot.lot_id, { deadline: newDeadline });
           logInfo(`Аукцион продлен до ${newDeadline.toLocaleString()}`);
@@ -1319,56 +1305,20 @@ function handleWallReplyNew(payload) {
       Monitoring.recordEvent('AUCTION_EXTENSION_SKIPPED_TEST_MODE', { lot_id: currentLot.lot_id });
     }
 
-    // 3. Отправляем ответ перебитому пользователю
-    // Для тестов симулятора (где пользователь перебивает сам себя) временно отключаем проверку ID
-    // if (oldLeaderBid && String(oldLeaderBid.data.user_id) !== userId) {
+    // 4. Отправляем ответ перебитому пользователю только в комментарии
     if (oldLeaderBid) {
-      // Отправляем уведомление в комментарий (по умолчанию)
-      if (true) { // Всегда отправляем в комментарий как основное уведомление
-        const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid });
-        try {
-          let replySuccess = false;
-          let errorResponse = null;
-
-          if (oldLeaderBid.data.comment_id) {
-            const replyResult = replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
-            if (replyResult && !replyResult.error) {
-              replySuccess = true;
-            } else {
-              errorResponse = replyResult;
-            }
-          }
-
-          if (replySuccess) {
-            updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен");
-            logDebug(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке`);
-          } else {
-            // Анализируем ошибку
-            const errorCode = errorResponse?.error?.error_code;
-            const errorMsg = errorResponse?.error?.error_msg || "Unknown error";
-            
-            logDebug(`⚠️ Ошибка при ответе на комментарий ${oldLeaderBid.data.comment_id}: [${errorCode}] ${errorMsg}`);
-
-            // Фоллбэк ТОЛЬКО если комментарий не найден (код 100), доступ запрещен (код 15)
-            // или родительский комментарий удален (код 10 - Internal server error: parent deleted)
-            if (errorCode === 100 || errorCode === 15 || errorCode === 10) {
-               logInfo(`🔄 Запускаю фоллбэк: публикация нового комментария с упоминанием.`);
-               const fallbackMessage = `[id${oldLeaderBid.data.user_id}|${getUserName(oldLeaderBid.data.user_id)}], ${outbidCommentMessage}`;
-               postCommentToLot(parsePostKey(postKey).postId, fallbackMessage);
-               updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен (фоллбэк)");
-            } else {
-               logInfo(`❌ Фоллбэк пропущен. Ошибка не критична для переотправки или требует внимания.`);
-            }
-          }
-        } catch (e) {
-          logError("reply_outbid", e);
+      const outbidCommentMessage = buildOutbidMessage({ lot_name: currentLot.name, new_bid: bid });
+      try {
+        if (oldLeaderBid.data.comment_id) {
+           // Проверяем, не отвечали ли мы ему уже
+           if (!checkIfBotReplied(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id)) {
+              replyToComment(parsePostKey(postKey).postId, oldLeaderBid.data.comment_id, outbidCommentMessage);
+              updateBidStatus(oldLeaderBid.data.bid_id, "уведомлен");
+              logDebug(`💬 Ответил пользователю ${oldLeaderBid.data.user_id} о перебитой ставке в комментариях`);
+           }
         }
-      }
-      
-      // Отправляем уведомление в ЛС только если включена настройка отправки ЛС победителям
-      if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
-        const notification = { user_id: oldLeaderBid.data.user_id, type: "outbid", payload: { lot_id: currentLot.lot_id, lot_name: currentLot.name, new_bid: bid, post_id: postKey } };
-        queueNotification(notification);
+      } catch (e) {
+        logError("reply_outbid", e);
       }
     }
   } finally {
@@ -1388,8 +1338,20 @@ function validateBid(bid, lot, commentDate) {
   if (settings.max_bid && bid > settings.max_bid) return {isValid: false, reason: buildMaxBidExceededMessage({your_bid: bid, max_bid: settings.max_bid})};
   const currentPrice = Number(lot.current_price || 0);
   const startPrice = Number(lot.start_price || 0);
-  if (!lot.leader_id) { if (bid < startPrice) return {isValid: false, reason: `Первая ставка не может быть меньше ${startPrice}₽.`}; }
-  else { if (bid < currentPrice + Number(settings.min_bid_increment || 50)) return {isValid: false, reason: buildLowBidMessage({your_bid: bid, lot_name: lot.name, current_bid: currentPrice})}; }
+  const minIncrement = Number(settings.min_bid_increment || 50);
+  const requiredBid = currentPrice + minIncrement;
+
+  if (!lot.leader_id) { 
+    if (bid < startPrice) return {isValid: false, reason: `Первая ставка не может быть меньше ${startPrice}₽.`}; 
+  }
+  else { 
+    if (bid < requiredBid) {
+      return {
+        isValid: false, 
+        reason: `Ставка ${bid}₽ слишком мала. Минимальная следующая ставка: ${requiredBid}₽ (текущая ${currentPrice}₽ + шаг ${minIncrement}₽).`
+      };
+    }
+  }
   if (getSetting("bid_step_enabled") === "ВКЛ") {
     if ((bid - startPrice) % Number(settings.bid_step || 50) !== 0) return {isValid: false, reason: buildInvalidStepMessage({your_bid: bid, bid_step: settings.bid_step, example_bid: currentPrice + 50, example_bid2: currentPrice + 100})};
   }
@@ -1401,21 +1363,6 @@ function enhancedValidateBid(bid, lot, userId) {
   const standardValidation = validateBid(bid, lot);
   if (!standardValidation.isValid) {
     return standardValidation;
-  }
-  
-  // Then, check if user meets participation requirements
-  const settings = getSettings();
-  
-  // Check if subscription validation is enabled
-  if (getSetting('subscription_check_enabled') === 'ВКЛ') {
-    const isSubscribed = checkUserSubscription(userId);
-    
-    if (!isSubscribed) {
-      return {
-        isValid: false,
-        reason: buildSubscriptionRequiredMessage({ lot_name: lot.name })
-      };
-    }
   }
   
   return {
@@ -1439,13 +1386,7 @@ function sendNotification(queueRow) {
     if (queueRow.type === "winner") {
       // Победителю отправляем в ЛС, так как там реквизиты
       sendMessage(queueRow.user_id, buildWinnerMessage(payload));
-    } else if (queueRow.type === "subscription_required") {
-      // Уведомление о подписке тоже в ЛС (хотя можно и в комменты)
-      sendMessage(queueRow.user_id, buildSubscriptionRequiredMessage(payload));
     }
-    // Для "outbid" и "low_bid" мы уже ответили в комментариях в handleWallReplyNew.
-    // В ЛС дублировать НЕ НАДО (по просьбе пользователя).
-    // Функция оставлена для winner и других типов.
   } catch (error) {
     // Обработка ошибок при отправке уведомлений
     logError('sendNotification_error', error, {
@@ -1693,12 +1634,15 @@ function finalizeAuction() {
     const postId = parsePostKey(lot.post_id).postId;
     
     if (!lot.leader_id) {
-      updateLot(lot.lot_id, { status: "Не продан" });
+      updateLot(lot.post_id, { status: "Не продан" }); // СНАЧАЛА МЕНЯЕМ СТАТУС
       postCommentToLot(postId, buildUnsoldLotCommentMessage());
       Monitoring.recordEvent('LOT_UNSOLD', { lot_id: lot.lot_id });
     } else {
       const winnerId = String(lot.leader_id);
       const winnerName = getUserName(winnerId);
+
+      // 1. СРАЗУ МЕНЯЕМ СТАТУС (Критично для остановки петли)
+      updateLot(lot.post_id, { status: "Продан" });
 
       const newOrder = {
         order_id: `${lot.lot_id}-${winnerId}`,
@@ -1734,8 +1678,6 @@ function finalizeAuction() {
         allUsers.push({ data: newUser, rowIndex: -1 });
       }
       
-      updateLot(lot.lot_id, { status: "Продан" });
-
       // Отправляем уведомление победителю в ЛС только если включена настройка отправки ЛС победителям
       if (getSetting('send_winner_dm_enabled') === 'ВКЛ') {
         const notification = { user_id: winnerId, type: "winner", payload: { lot_id: lot.lot_id, lot_name: lot.name, price: lot.current_price, group_id: getVkGroupId() } };
@@ -1830,7 +1772,7 @@ function setupTriggers() {
       .atHour(2)
       .create();
 
-    ui.alert("✅ Система инициализирована", "Создан ежедневный запуск в 21:00. Мониторинг будет включаться автоматически только во время финала аукциона.", ui.ButtonSet.OK);
+    ui.alert("✅ Система инициализирована", "Созданы триггеры: \n1. Ежедневный запуск (21:00)\n2. Очистка логов (02:00)", ui.ButtonSet.OK);
   } catch (e) {
     ui.alert("❌ Ошибка: " + e.toString());
   }
@@ -2255,20 +2197,6 @@ function generateHealthSummary(results) {
  * @param {string} payload - The raw JSON payload from VK API.
  */
 /**
- * Adds an event to the EventQueue for asynchronous processing.
- * @param {string} payload - The raw JSON payload from VK API.
- */
-function enqueueEvent(payload) {
-  appendRow("EventQueue", {
-    eventId: Utilities.getUuid(),
-    payload: payload,
-    status: "pending",
-    receivedAt: new Date()
-  });
-  Monitoring.recordEvent('EVENT_ENQUEUED', { payload_preview: payload.substring(0, 100) });
-}
-
-/**
  * Processes events from the EventQueue.
  * This function is triggered every minute by a time-based trigger.
  */
@@ -2318,7 +2246,7 @@ function processEventQueue(L) {
       Monitoring.recordEvent('EVENT_PROCESSING_FAILED', { 
         eventId: row.data.eventId, 
         error: error.message,
-        payload: row.data.payload.substring(0, 200)
+        payload: String(row.data.payload || "").substring(0, 200)
       });
     }
   }

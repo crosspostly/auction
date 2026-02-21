@@ -465,7 +465,7 @@ function checkIfBotReplied(postId, commentId) {
       post_id: String(postId),
       count: 10,
       sort: "desc"
-    });
+    }, getVkToken(true)); // ИСПОЛЬЗУЕМ USER_TOKEN (обязательно для wall.getComments)
     
     if (res && res.response && res.response.items) {
       // Ищем комментарии, где author_id равен ID нашей группы (отрицательное значение)

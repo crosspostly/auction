@@ -7,11 +7,14 @@
  */
 function startAuctionMonitoring() {
   const now = new Date();
-  const isSaturday = (now.getDay() === 6);
+  // Проверка субботы строго по Москве (GMT+3)
+  const dayOfWeekMoscow = Utilities.formatDate(now, "GMT+3", "u"); // 1=Mon, 6=Sat, 7=Sun
+  const isSaturday = (dayOfWeekMoscow === "6");
+  
   const saturdayOnly = (getSetting('saturday_only_enabled') === 'ВКЛ');
 
   if (saturdayOnly && !isSaturday) {
-    logInfo("📅 Режим 'Только суббота' активен. Сегодня не суббота, мониторинг не будет запущен.");
+    logInfo("📅 Режим 'Только суббота' активен. Сегодня не суббота по МСК, мониторинг не будет запущен.");
     return;
   }
 
@@ -19,11 +22,28 @@ function startAuctionMonitoring() {
   const hasActive = allLots.some(l => l.data.status === "active" || l.data.status === "Активен");
 
   if (hasActive) {
-    deleteTriggerByName("periodicSystemCheck");
-    ScriptApp.newTrigger("periodicSystemCheck").timeBased().everyMinutes(10).create();
+    activateFrequentMonitoring();
     logInfo("🚀 Субботний финал начался! Мониторинг дедлайнов активирован.");
   } else {
     logDebug("Активных лотов для финализации не найдено.");
+  }
+}
+
+/**
+ * Активирует частую проверку (раз в минуту) для завершения аукционов.
+ * Безопасно для повторного вызова (не плодит дубликаты триггеров).
+ */
+function activateFrequentMonitoring() {
+  const functionName = "periodicSystemCheck";
+  const triggers = ScriptApp.getProjectTriggers();
+  const existing = triggers.find(t => t.getHandlerFunction() === functionName);
+  
+  if (!existing) {
+    ScriptApp.newTrigger(functionName)
+      .timeBased()
+      .everyMinutes(1)
+      .create();
+    logInfo("⏱️ Активирован минутный мониторинг финализации.");
   }
 }
 
@@ -43,9 +63,13 @@ function periodicSystemCheck() {
     if (expiredLots.length > 0) {
       logInfo(`Найдено ${expiredLots.length} лотов с истекшим сроком. Финализируем...`);
       finalizeAuction();
-    } else {
-      // Даже если просроченных нет, вызываем для проверки, не пора ли удалять триггер
-      sendAllSummaries();
+    } 
+    
+    // ПРОВЕРКА ОСТАНОВКИ: если активных лотов больше нет - удаляем триггер
+    const activeLots = getSheetData("Config").filter(row => row.data.status === "active" || row.data.status === "Активен");
+    if (activeLots.length === 0) {
+      logInfo("✅ Все лоты обработаны. Останавливаю минутный мониторинг.");
+      deleteTriggerByName("periodicSystemCheck");
     }
 
   } catch (error) {
