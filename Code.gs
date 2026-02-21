@@ -1810,18 +1810,29 @@ function finalizeAuction() {
  * Includes a trigger for the new event queue processing.
  */
 function setupTriggers() {
-  // Delete all existing triggers to avoid duplicates
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  const ui = SpreadsheetApp.getUi();
+  try {
+    // 1. Удаляем ВСЕ текущие триггеры проекта
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(t => ScriptApp.deleteTrigger(t));
 
-  // A single trigger to run all periodic tasks every 5 minutes.
-  ScriptApp.newTrigger("runPeriodicTasks").timeBased().everyMinutes(5).create();
+    // 2. Создаем триггер мониторинга (10 мин)
+    ScriptApp.newTrigger("periodicSystemCheck")
+      .timeBased()
+      .everyMinutes(10)
+      .create();
+    
+    // 3. Создаем триггер обслуживания (ежедневно в 2 часа ночи)
+    ScriptApp.newTrigger("dailyMaintenance")
+      .timeBased()
+      .everyDays(1)
+      .atHour(2)
+      .create();
 
-  // Trigger for checking auction finalization every 15 minutes.
-  ScriptApp.newTrigger("checkAndFinalizeAuctions").timeBased().everyMinutes(15).create();
-  
-  // Setup monitoring and maintenance triggers
-  setupPeriodicMonitoring();
-  setupDailyMaintenance();
+    ui.alert("✅ Успех", "Старые триггеры удалены. Новые созданы:\n- periodicSystemCheck (раз в 10 мин)\n- dailyMaintenance (раз в сутки)", ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert("❌ Ошибка при создании триггеров: " + e.toString());
+  }
 }
 
 /**
