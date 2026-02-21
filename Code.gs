@@ -1221,7 +1221,7 @@ function updateBidStatus(bidId, newStatus) {
 function parseRussianDate(dateString) {
   if (!dateString) return null;
   if (dateString instanceof Date) return dateString;
-  
+
   // Handle Numbers (Excel-style serial dates)
   if (typeof dateString === 'number') {
     // 25569 = milliseconds between Jan 1 1900 and Jan 1 1970
@@ -1230,11 +1230,18 @@ function parseRussianDate(dateString) {
 
   let s = String(dateString).trim();
   if (s.startsWith("'")) s = s.substring(1).trim(); // Clean apostrophe
-  
+
   // 1. Try ISO format (often comes from JSON.parse of a Date object)
   if (s.includes('T') && s.endsWith('Z')) {
     const d = new Date(s);
-    if (!isNaN(d.getTime())) return d;
+    if (!isNaN(d.getTime())) {
+      // UTC дату нужно вернуть как есть - Date объект сам хранит время в UTC
+      // При сравнении с new Date() (локальное время) всё будет корректно
+      // НО! Google Sheets хранит даты в локальном времени скрипта
+      // Поэтому конвертируем UTC в MSK (Europe/Moscow)
+      const mskTime = Utilities.formatDate(d, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+      return Utilities.parseDate(mskTime, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+    }
   }
 
   // 2. Try primary Russian format
@@ -1257,7 +1264,7 @@ function parseRussianDate(dateString) {
         const sec = match[6] ? Number(match[6]) : 0;
         return new Date(year, month, day, hour, min, sec);
       }
-      
+
       // 5. Last resort: standard JS parse
       const dJS = new Date(s);
       if (!isNaN(dJS.getTime())) return dJS;

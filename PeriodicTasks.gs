@@ -52,7 +52,11 @@ function activateFrequentMonitoring() {
  */
 function periodicSystemCheck() {
   try {
-    // 1. Сначала полностью разгребаем очередь событий, чтобы не закрыть лот 
+    const now = new Date();
+    const nowMSK = Utilities.formatDate(now, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+    logInfo(`⏱️ periodicSystemCheck: Запуск проверки. Время (MSK): ${nowMSK}`);
+    
+    // 1. Сначала полностью разгребаем очередь событий, чтобы не закрыть лот
     // до того, как последняя ставка запишется в таблицу.
     let hasPending = true;
     let safeguard = 0;
@@ -61,22 +65,39 @@ function periodicSystemCheck() {
       const pendingCount = getSheetData("EventQueue").filter(e => e.data.status === "pending").length;
       hasPending = pendingCount > 0;
       safeguard++;
-      if (hasPending) Utilities.sleep(500); 
+      if (hasPending) Utilities.sleep(500);
     }
 
-    const now = new Date();
     // 2. Теперь ищем лоты, время которых реально вышло
     const configData = getSheetData("Config");
+    logInfo(`📊 periodicSystemCheck: Всего лотов: ${configData.length}`);
+    
     const expiredLots = configData.filter(row => {
       const deadline = parseRussianDate(row.data.deadline);
-      return (row.data.status === "active" || row.data.status === "Активен") && 
-             deadline && deadline <= now;
+      const isActive = (row.data.status === "active" || row.data.status === "Активен");
+      const isExpired = deadline && deadline <= now;
+      
+      // Логируем каждый активный лот
+      if (isActive) {
+        const deadlineStr = deadline ? Utilities.formatDate(deadline, "GMT+3", "dd.MM.yyyy HH:mm:ss") : "NULL";
+        const rawDeadline = row.data.deadline;
+        const deadlineType = typeof rawDeadline;
+        logInfo(`   🔍 Лот ${row.data.lot_id}: статус=${row.data.status}, дедлайн=${deadlineStr}, истёк=${isExpired}`);
+        logInfo(`      🔎 Сырое значение: "${rawDeadline}" (Type: ${deadlineType})`);
+        if (deadline) {
+          logInfo(`      🔎 Сравнение: deadline.getTime()=${deadline.getTime()}, now.getTime()=${now.getTime()}, результат=${deadline <= now}`);
+        }
+      }
+      
+      return isActive && deadline && deadline <= now;
     });
+
+    logInfo(`✅ periodicSystemCheck: Найдено просроченных лотов: ${expiredLots.length}`);
     
     if (expiredLots.length > 0) {
       logInfo(`Найдено ${expiredLots.length} лотов с истекшим сроком. Финализируем...`);
       finalizeAuction();
-    } 
+    }
     
     // 3. ПРОВЕРКА ОСТАНОВКИ: если активных лотов больше нет - рассылаем итоги и удаляем триггер
     const activeLots = getSheetData("Config").filter(row => row.data.status === "active" || row.data.status === "Активен");
