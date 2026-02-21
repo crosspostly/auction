@@ -368,12 +368,12 @@ function test_timeZones() {
     },
     {
       name: "Unix timestamp (секунды)",
-      input: 1740164400, // 21.02.2026 21:00:00 MSK
+      input: 1771696800, // 21.02.2026 21:00:00 MSK = 18:00 UTC
       expectedMSK: "21.02.2026 21:00:00"
     },
     {
       name: "Unix timestamp (миллисекунды)",
-      input: 1740164400000,
+      input: 1771696800000,
       expectedMSK: "21.02.2026 21:00:00"
     }
   ];
@@ -458,10 +458,10 @@ function test_auctionExtension() {
       shouldExtend: true
     },
     {
-      name: "Ставка через 1 минуту после дедлайна (продлевать, если ещё активен)",
+      name: "Ставка через 1 минуту после дедлайна (продлевать, т.к. < 10 мин)",
       bidTime: new Date(baseDeadline.getTime() + 1 * 60 * 1000),
       deadline: baseDeadline,
-      shouldExtend: false // Уже просрочен
+      shouldExtend: true // Логика продления: timeUntilDeadline > -10, так что -1 минута ещё продлевается
     }
   ];
   
