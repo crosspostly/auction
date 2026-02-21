@@ -2518,17 +2518,31 @@ function sendAllSummaries() {
   const propKey = "SUMMARY_SENT_" + dateKey;
   
   const allLots = getSheetData("Config");
-  const activeCount = allLots.filter(l => l.data.status === "active" || l.data.status === "Активен").length;
+  const activeLots = allLots.filter(l => l.data.status === "active" || l.data.status === "Активен");
   
-  if (activeCount > 0) return; // Еще торгуются
+  if (activeLots.length > 0) {
+    logDebug("Рассылка отложена: еще есть активные лоты (" + activeLots.length + ").");
+    return;
+  }
 
-  // ЕСЛИ ВСЕ ЗАКРЫТО - УДАЛЯЕМ ЛИШНИЙ ТРИГГЕР (Самоликвидация)
+  // ЕСЛИ ВСЕ ЗАКРЫТО - УДАЛЯЕМ ТРИГГЕР
   deleteTriggerByName("periodicSystemCheck");
 
   if (props.getProperty(propKey) === "true") return;
 
-  const soldToday = allLots.filter(l => l.data.status === "Продан" || l.data.status === "sold");
-  if (soldToday.length === 0) return;
+  // Фильтруем лоты, проданные СЕГОДНЯ (или у которых дедлайн совпадает с сегодняшним днем)
+  const todayStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd.MM.yyyy");
+  const soldToday = allLots.filter(l => {
+    const status = String(l.data.status).toLowerCase();
+    const isSold = (status === "продан" || status === "sold");
+    const deadline = String(l.data.deadline);
+    return isSold && deadline.includes(todayStr); // Проверка на сегодняшнюю дату
+  });
+
+  if (soldToday.length === 0) {
+    logDebug("Сегодня не было продано ни одного лота.");
+    return;
+  }
 
   const winnersMap = {};
   soldToday.forEach(lot => {
@@ -2543,7 +2557,10 @@ function sendAllSummaries() {
   for (const userId in winnersMap) {
     if (sendToWinners) {
       const summary = buildUserOrderSummary(userId);
-      if (!summary.startsWith("У вас нет")) sendMessage(userId, summary);
+      if (!summary.startsWith("У вас нет")) {
+        sendMessage(userId, summary);
+        logInfo("✉️ Сводка за сегодня отправлена победителю " + userId);
+      }
     }
     winnersMap[userId].forEach(lot => {
       winnersListForReport.push({
@@ -2556,7 +2573,7 @@ function sendAllSummaries() {
 
   if (winnersListForReport.length > 0) sendAdminReport(winnersListForReport);
   props.setProperty(propKey, "true");
-  logInfo("🏁 Аукцион завершен, сводки разосланы, триггер мониторинга удален.");
+  logInfo("🏁 Аукционный день завершен. Сводки за " + todayStr + " разосланы.");
 }
 
 function sendAdminReport(winners) {

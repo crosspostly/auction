@@ -6,12 +6,12 @@
  * ЗАПУСКАТЕЛЬ: Срабатывает в 21:00. Создает частый мониторинг, если есть активные лоты.
  */
 function startAuctionMonitoring() {
-  const settings = getSettings();
   const now = new Date();
-  
-  // Если включен режим "Только суббота" - проверяем день
-  if (getSetting('saturday_only_enabled') === 'ВКЛ' && now.getDay() !== 6) {
-    logDebug("Сегодня не суббота, автозапуск мониторинга пропущен.");
+  const isSaturday = (now.getDay() === 6);
+  const saturdayOnly = (getSetting('saturday_only_enabled') === 'ВКЛ');
+
+  if (saturdayOnly && !isSaturday) {
+    logInfo("📅 Режим 'Только суббота' активен. Сегодня не суббота, мониторинг не будет запущен.");
     return;
   }
 
@@ -19,16 +19,11 @@ function startAuctionMonitoring() {
   const hasActive = allLots.some(l => l.data.status === "active" || l.data.status === "Активен");
 
   if (hasActive) {
-    // Удаляем старый, если вдруг завис
     deleteTriggerByName("periodicSystemCheck");
-    
-    // Создаем частый триггер на период финала
-    ScriptApp.newTrigger("periodicSystemCheck")
-      .timeBased()
-      .everyMinutes(10)
-      .create();
-    
-    logInfo("🚀 Финал начался! Активирован 10-минутный мониторинг дедлайнов.");
+    ScriptApp.newTrigger("periodicSystemCheck").timeBased().everyMinutes(10).create();
+    logInfo("🚀 Субботний финал начался! Мониторинг дедлайнов активирован.");
+  } else {
+    logDebug("Активных лотов для финализации не найдено.");
   }
 }
 
