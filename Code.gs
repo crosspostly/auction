@@ -225,7 +225,8 @@ function runSetupWizard() {
   if (response !== ui.Button.YES) return;
   try {
     setupSheets();
-    createDemoData(); // createDemoData now handles all settings creation and dropdowns
+    cleanupSettingsSheet(); // Сначала чистим старый мусор
+    createDemoData(); // Затем добавляем недостающее
     setupTriggers();
     logInfo("Мастер настройки выполнен");
     ui.alert('✅ Готово!');

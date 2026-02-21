@@ -133,6 +133,34 @@ const TOGGLE_SETTINGS = {
 };
 
 var _ss_cache = null;
+function cleanupSettingsSheet() {
+  const sheet = getSheet('Settings');
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return;
+
+  const seenKeys = new Set();
+  const rowsToDelete = [];
+
+  // Идем сверху вниз. Оставляем ПЕРВОЕ вхождение ключа.
+  for (let i = 1; i < values.length; i++) {
+    const key = String(values[i][0]).trim();
+    
+    // Если строка пустая или ключ уже встречался - помечаем на удаление
+    if (!key || seenKeys.has(key)) {
+      rowsToDelete.push(i + 1);
+    } else {
+      seenKeys.add(key);
+    }
+  }
+
+  // Удаляем строки СНИЗУ ВВЕРХ, чтобы не сбились индексы
+  for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+    sheet.deleteRow(rowsToDelete[i]);
+  }
+  
+  logInfo("Лист настроек проверен. Удалено дубликатов: " + rowsToDelete.length);
+}
+
 function getSpreadsheet() { 
   if (!_ss_cache) _ss_cache = SpreadsheetApp.getActiveSpreadsheet();
   return _ss_cache; 
@@ -241,22 +269,20 @@ function appendRow(sheetKey, rowData) {
   
   const row = headers.map(h => {
     let val = rowData[h];
-    // --- FORCE DATE FORMATTING ---
     if (val instanceof Date) {
       return Utilities.formatDate(val, Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
     }
     return val !== undefined ? val : "";
   });
   
-  // Insert new row immediately after the header (row 1)
-  // This makes the newest entries appear at the top (descending order)
-  sheet.insertRowAfter(1);
-  const range = sheet.getRange(2, 1, 1, row.length);
+  // ДОБАВЛЯЕМ В КОНЕЦ (нормальный порядок)
+  const lastRow = sheet.getLastRow();
+  const range = sheet.getRange(lastRow + 1, 1, 1, row.length);
   range.setValues([row]);
-  range.setFontWeight("normal"); // Reset formatting to normal (not bold)
+  range.setFontWeight("normal");
   
-  SpreadsheetApp.flush(); // Force the sheet to update immediately
-  CacheService.getScriptCache().remove('sheet_' + sheetKey); // Always clear cache on write
+  SpreadsheetApp.flush(); 
+  CacheService.getScriptCache().remove('sheet_' + sheetKey); 
 }
 
 function updateRow(sheetKey, rowIndex, rowData) {
@@ -450,100 +476,51 @@ function parseSettingValue(v) {
 }
 
 function createDemoData() {
-  const lotSheet = getSheet('Config');
-  if (lotSheet.getLastRow() <= 1) {
-    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'active', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
-  }
+  const sheet = getSheet('Settings');
+  // Используем свежие данные без кэша для точности
+  const values = sheet.getDataRange().getValues();
+  const existingKeys = values.map(row => String(row[0]).trim());
 
-  const addSettingIfNotExists = (key, value, description) => {
-    // Re-fetch existing settings inside the helper to ensure we have the latest data,
-    // as appendRow will clear the cache.
-    const existingSettings = getSheetData('Settings').map(s => s.data.setting_key);
-    if (!existingSettings.includes(key)) {
-      // Use the project's custom appendRow to ensure cache is busted for the next check.
-      appendRow("Settings", { 
-        setting_key: key, 
-        setting_value: value, 
-        description: description 
-      });
+  const addIfMissing = (key, value, desc) => {
+    if (!existingKeys.includes(key)) {
+      appendRow("Settings", { setting_key: key, setting_value: value, description: desc });
+      existingKeys.push(key);
     }
   };
 
+  // Проверка для примера лота
+  const lotSheet = getSheet('Config');
+  if (lotSheet.getLastRow() <= 1) {
+    appendRow('Config', { lot_id: '1234', name: 'Пример лота', start_price: 1000, current_price: 1000, status: 'Активен', created_at: new Date(), deadline: new Date(new Date().getTime() + 7*24*60*60*1000) });
+  }
+
   // --- АДМИНИСТРАТОР ---
-  addSettingIfNotExists("--- АДМИНИСТРАТОР ---", "", "");
-  addSettingIfNotExists("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
+  addIfMissing("--- АДМИНИСТРАТОР ---", "", "");
+  addIfMissing("ADMIN_IDS", "", SETTINGS_DESCRIPTIONS.ADMIN_IDS);
 
   // --- ОСНОВНЫЕ ПАРАМЕТРЫ ---
-  addSettingIfNotExists("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
+  addIfMissing("--- ОСНОВНЫЕ ПАРАМЕТРЫ ---", "", "");
   for (const key of ["CODE_WORD", "bid_step", "min_bid_increment", "max_bid", "delivery_rules"]) {
-    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+    addIfMissing(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
 
   // --- ПЕРЕКЛЮЧАТЕЛИ ---
-  addSettingIfNotExists("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
-  for (const key of [
-    "bid_step_enabled",
-    "subscription_check_enabled",
-    "debug_logging_enabled",
-    "reply_on_invalid_bid_enabled",
-    "send_winner_dm_enabled",
-    "saturday_only_enabled",
-    "test_mode_enabled"
-  ]) {
-    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+  addIfMissing("--- ПЕРЕКЛЮЧАТЕЛИ ---", "", "");
+  for (const key of ["bid_step_enabled", "subscription_check_enabled", "debug_logging_enabled", "reply_on_invalid_bid_enabled", "send_winner_dm_enabled", "saturday_only_enabled", "test_mode_enabled"]) {
+    addIfMissing(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
 
-  // --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---
-  addSettingIfNotExists("--- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ---", "", "");
-
   // --- ШАБЛОНЫ ---
-  addSettingIfNotExists("--- ШАБЛОНЫ ---", "", "");
-  const templateKeys = [
-    "order_summary_template",
-    "winner_comment_template",
-    "unsold_lot_comment_template",
-    "outbid_notification_template",
-    "low_bid_notification_template",
-    "winner_notification_template",
-    "subscription_required_template",
-    "invalid_step_template",
-    "max_bid_exceeded_template",
-    "auction_finished_template",
-  ];
+  addIfMissing("--- ШАБЛОНЫ ---", "", "");
+  const templateKeys = ["order_summary_template", "winner_comment_template", "unsold_lot_comment_template", "outbid_notification_template", "low_bid_notification_template", "winner_notification_template", "subscription_required_template", "invalid_step_template", "max_bid_exceeded_template", "auction_finished_template"];
   for (const key of templateKeys) {
-    addSettingIfNotExists(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
+    addIfMissing(key, DEFAULT_SETTINGS[key], SETTINGS_DESCRIPTIONS[key]);
   }
   
   applyDropdownValidation();
   setupConditionalFormatting();
-
-  const usersSheet = getSheet('Users');
-  const ordersSheet = getSheet('Orders');
-  const orderStatusesSheet = getSheet('OrderStatuses');
-
-  if (orderStatusesSheet.getLastRow() <= 1) {
-    SHIPPING_STATUS_OPTIONS.forEach(status => {
-      appendRow('OrderStatuses', { status_key: status, status_description: SHIPPING_STATUS_DESCRIPTIONS[status] });
-    });
-  }
-
-  const usersHeaders = SHEETS.Users.headers;
-  const shippingStatusColIndex = usersHeaders.indexOf('shipping_status') + 1;
-  if (shippingStatusColIndex > 0) {
-    const dropdownRange = usersSheet.getRange(2, shippingStatusColIndex, 999, 1);
-    const rule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(SHIPPING_STATUS_OPTIONS)
-      .setAllowInvalid(false)
-      .setHelpText('Выберите статус отправки из списка.')
-      .build();
-    dropdownRange.setDataValidation(rule);
-  }
-
-  applyHeaderTooltips(usersSheet, SHEETS.Users.headers, USER_HEADERS_DESCRIPTIONS);
-  applyHeaderTooltips(ordersSheet, SHEETS.Orders.headers, ORDER_HEADERS_DESCRIPTIONS);
-  
-  setupUsersConditionalFormatting();
   setupOrdersConditionalFormatting();
+  setupUsersConditionalFormatting();
 }
 
 /**
